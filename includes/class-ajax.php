@@ -1,7 +1,7 @@
 <?php
 /**
- * Complete AJAX Handler Class - FIXED VERSION
- * File: includes/class-ajax.php
+ * ENHANCED AJAX CLASS WITH DATABASE CONNECTION FIXES
+ * File: includes/class-ajax.php (UPDATED VERSION)
  */
 
 class ETT_Ajax {
@@ -15,7 +15,32 @@ class ETT_Ajax {
     }
     
     /**
-     * Initialize all AJAX handlers
+     * Validate database connection before any AJAX operation
+     */
+    private function validate_database_connection() {
+        if (!$this->database || !is_object($this->database)) {
+            wp_send_json_error('Database object not available');
+            return false;
+        }
+        
+        if (!$this->database->is_connected()) {
+            // Attempt reconnection
+            if (method_exists($this->database, 'reconnect')) {
+                if (!$this->database->reconnect()) {
+                    wp_send_json_error('Database connection failed: ' . $this->database->get_last_error());
+                    return false;
+                }
+            } else {
+                wp_send_json_error('Database not connected: ' . $this->database->get_last_error());
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Initialize all AJAX handlers with connection validation
      */
     public function init_ajax_handlers() {
         // Frontend AJAX handlers (accessible to all users)
@@ -44,12 +69,47 @@ class ETT_Ajax {
         add_action('wp_ajax_ett_update_issue_status', array($this, 'ett_update_issue_status'));
         add_action('wp_ajax_ett_send_break_warning', array($this, 'ett_send_break_warning'));
         add_action('wp_ajax_ett_send_missing_data_warning', array($this, 'ett_send_missing_data_warning'));
+        
+        // Database health check AJAX
+        add_action('wp_ajax_ett_check_database_health', array($this, 'ett_check_database_health'));
     }
     
     /**
-     * Employee login with improved validation
+     * Database health check AJAX endpoint
+     */
+    public function ett_check_database_health() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Unauthorized access');
+            return;
+        }
+        
+        try {
+            if ($this->validate_database_connection()) {
+                // Test basic operations
+                $employees = $this->database->get_all_employees();
+                $tags = $this->database->get_all_tags();
+                
+                wp_send_json_success(array(
+                    'status' => 'healthy',
+                    'employee_count' => is_array($employees) ? count($employees) : 0,
+                    'tag_count' => is_array($tags) ? count($tags) : 0,
+                    'message' => 'Database connection is healthy'
+                ));
+            }
+        } catch (Exception $e) {
+            wp_send_json_error('Database health check failed: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Employee login with enhanced database validation
      */
     public function ett_employee_login() {
+        // Validate database connection first
+        if (!$this->validate_database_connection()) {
+            return; // Error already sent
+        }
+        
         // Verify nonce
         if (!isset($_POST['nonce']) || !$this->security->verify_nonce($_POST['nonce'], 'ett_employee_login')) {
             wp_send_json_error('Security check failed');
@@ -69,34 +129,44 @@ class ETT_Ajax {
             return;
         }
         
-        // Check database connection
-        if (!$this->database->is_connected()) {
-            wp_send_json_error('Database connection error');
-            return;
-        }
-        
         // Rate limiting
         if (!$this->security->check_rate_limit('login', 0, 5, 300)) {
             wp_send_json_error('Too many login attempts. Please try again later.');
             return;
         }
         
-        // Get employee
-        $employee = $this->database->get_employee_by_code($employee_code);
-        
-        if ($employee) {
-            if ($this->security->set_employee_login($employee->id)) {
-                wp_send_json_success('Login successful');
-            } else {
-                wp_send_json_error('Failed to set login session');
+        try {
+            // Get employee with database error handling
+            $employee = $this->database->get_employee_by_code($employee_code);
+            
+            if ($employee === false) {
+                $error = $this->database->get_last_error();
+                if (!empty($error)) {
+                    wp_send_json_error('Database error: ' . $error);
+                } else {
+                    wp_send_json_error('Invalid employee code');
+                }
+                return;
             }
-        } else {
-            wp_send_json_error('Invalid employee code');
+            
+            if ($employee) {
+                if ($this->security->set_employee_login($employee->id)) {
+                    wp_send_json_success('Login successful');
+                } else {
+                    wp_send_json_error('Failed to set login session');
+                }
+            } else {
+                wp_send_json_error('Invalid employee code');
+            }
+            
+        } catch (Exception $e) {
+            error_log('ETT Login Exception: ' . $e->getMessage());
+            wp_send_json_error('Login failed due to system error');
         }
     }
     
     /**
-     * Employee logout
+     * Employee logout with validation
      */
     public function ett_employee_logout() {
         if (!isset($_POST['nonce']) || !$this->security->verify_nonce($_POST['nonce'], 'ett_employee_logout')) {
@@ -104,17 +174,27 @@ class ETT_Ajax {
             return;
         }
         
-        if ($this->security->destroy_session()) {
-            wp_send_json_success('Logged out successfully');
-        } else {
-            wp_send_json_error('Logout failed');
+        try {
+            if ($this->security->destroy_session()) {
+                wp_send_json_success('Logged out successfully');
+            } else {
+                wp_send_json_error('Logout failed');
+            }
+        } catch (Exception $e) {
+            error_log('ETT Logout Exception: ' . $e->getMessage());
+            wp_send_json_error('Logout failed due to system error');
         }
     }
     
     /**
-     * Save work log with comprehensive validation
+     * Save work log with comprehensive database validation
      */
     public function ett_save_log() {
+        // Validate database connection first
+        if (!$this->validate_database_connection()) {
+            return; // Error already sent
+        }
+        
         // Verify nonce
         if (!isset($_POST['nonce']) || !$this->security->verify_nonce($_POST['nonce'], 'ett_save_log')) {
             wp_send_json_error('Security check failed');
@@ -130,12 +210,6 @@ class ETT_Ajax {
         // Validate session
         if (!$this->security->is_session_valid()) {
             wp_send_json_error('Session expired. Please login again.');
-            return;
-        }
-        
-        // Check database connection
-        if (!$this->database->is_connected()) {
-            wp_send_json_error('Database connection error');
             return;
         }
         
@@ -160,48 +234,63 @@ class ETT_Ajax {
             return;
         }
         
-        // Check if data already submitted for this date
         global $wpdb;
-        $existing_submission = $wpdb->get_row($wpdb->prepare("
-            SELECT * FROM {$wpdb->prefix}ett_submission_status 
-            WHERE employee_id = %d AND submission_date = %s AND is_locked = 1
-        ", $employee_id, $log_date));
-        
-        if ($existing_submission) {
-            wp_send_json_error('Data already submitted and locked for this date');
-            return;
-        }
-        
-        // Rate limiting for submissions
-        if (!$this->security->check_rate_limit('submit_log', $employee_id, 3, 300)) {
-            wp_send_json_error('Too many submission attempts. Please wait before trying again.');
-            return;
-        }
-        
-        // Process logs
-        $total_minutes = 0;
-        $missing_mandatory = false;
-        
-        // Get mandatory tags for this employee
-        $mandatory_tags = $wpdb->get_col($wpdb->prepare("
-            SELECT tag_id FROM {$wpdb->prefix}ett_assignments 
-            WHERE employee_id = %d AND is_mandatory = 1
-        ", $employee_id));
-        
-        // Start transaction
-        $wpdb->query('START TRANSACTION');
         
         try {
+            // Check if data already submitted for this date
+            $existing_submission = $wpdb->get_row($wpdb->prepare("
+                SELECT * FROM {$wpdb->prefix}ett_submission_status 
+                WHERE employee_id = %d AND submission_date = %s AND is_locked = 1
+            ", $employee_id, $log_date));
+            
+            if ($wpdb->last_error) {
+                wp_send_json_error('Database error checking submission status: ' . $wpdb->last_error);
+                return;
+            }
+            
+            if ($existing_submission) {
+                wp_send_json_error('Data already submitted and locked for this date');
+                return;
+            }
+            
+            // Rate limiting for submissions
+            if (!$this->security->check_rate_limit('submit_log', $employee_id, 3, 300)) {
+                wp_send_json_error('Too many submission attempts. Please wait before trying again.');
+                return;
+            }
+            
+            // Process logs
+            $total_minutes = 0;
+            $missing_mandatory = false;
+            
+            // Get mandatory tags for this employee
+            $mandatory_tags = $wpdb->get_col($wpdb->prepare("
+                SELECT tag_id FROM {$wpdb->prefix}ett_assignments 
+                WHERE employee_id = %d AND is_mandatory = 1
+            ", $employee_id));
+            
+            if ($wpdb->last_error) {
+                wp_send_json_error('Database error getting mandatory tags: ' . $wpdb->last_error);
+                return;
+            }
+            
+            // Start transaction
+            $wpdb->query('START TRANSACTION');
+            
             foreach ($logs as $log) {
                 if (!isset($log['tag_id']) || !isset($log['count'])) {
-                    throw new Exception('Invalid log data format');
+                    $wpdb->query('ROLLBACK');
+                    wp_send_json_error('Invalid log data format');
+                    return;
                 }
                 
                 $tag_id = $this->security->sanitize_int($log['tag_id']);
                 $count = $this->security->sanitize_int($log['count'], 0, 9999);
                 
                 if ($tag_id <= 0) {
-                    throw new Exception('Invalid tag ID');
+                    $wpdb->query('ROLLBACK');
+                    wp_send_json_error('Invalid tag ID');
+                    return;
                 }
                 
                 // Check if mandatory tag is missing
@@ -210,7 +299,9 @@ class ETT_Ajax {
                 }
                 
                 if (!$this->database->save_log($employee_id, $tag_id, $count, $log_date)) {
-                    throw new Exception('Failed to save log: ' . $this->database->get_last_error());
+                    $wpdb->query('ROLLBACK');
+                    wp_send_json_error('Failed to save log: ' . $this->database->get_last_error());
+                    return;
                 }
                 
                 // Calculate total minutes
@@ -218,6 +309,12 @@ class ETT_Ajax {
                     "SELECT time_minutes FROM {$wpdb->prefix}ett_tags WHERE id = %d",
                     $tag_id
                 ));
+                
+                if ($wpdb->last_error) {
+                    $wpdb->query('ROLLBACK');
+                    wp_send_json_error('Database error getting tag info: ' . $wpdb->last_error);
+                    return;
+                }
                 
                 if ($tag) {
                     $total_minutes += $count * $tag->time_minutes;
@@ -241,16 +338,20 @@ class ETT_Ajax {
             );
             
             if ($submission_result === false) {
-                throw new Exception('Failed to record submission status');
+                $wpdb->query('ROLLBACK');
+                wp_send_json_error('Failed to record submission status: ' . $wpdb->last_error);
+                return;
             }
             
             // Create warning if mandatory tags are missing
             if ($missing_mandatory) {
-                $this->database->create_warning(
+                if (!$this->database->create_warning(
                     $employee_id,
                     'Mandatory tags were not filled for ' . $log_date,
                     $log_date
-                );
+                )) {
+                    error_log('ETT Warning Creation Failed: ' . $this->database->get_last_error());
+                }
             }
             
             // Commit transaction
@@ -264,14 +365,19 @@ class ETT_Ajax {
         } catch (Exception $e) {
             // Rollback transaction
             $wpdb->query('ROLLBACK');
-            wp_send_json_error('Failed to save work log: ' . $e->getMessage());
+            error_log('ETT Save Log Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to save work log due to system error');
         }
     }
     
     /**
-     * Get logs by date
+     * Get logs by date with database validation
      */
     public function ett_get_logs_by_date() {
+        if (!$this->validate_database_connection()) {
+            return;
+        }
+        
         if (!isset($_POST['nonce']) || !$this->security->verify_nonce($_POST['nonce'], 'ett_get_logs_by_date')) {
             wp_send_json_error('Security check failed');
             return;
@@ -291,20 +397,35 @@ class ETT_Ajax {
             return;
         }
         
-        $logs = $this->database->get_logs_by_date($employee_id, $log_date);
-        
-        $data = array();
-        foreach ($logs as $log) {
-            $data[$log->tag_id] = $log->count;
+        try {
+            $logs = $this->database->get_logs_by_date($employee_id, $log_date);
+            
+            if ($logs === false) {
+                wp_send_json_error('Database error getting logs: ' . $this->database->get_last_error());
+                return;
+            }
+            
+            $data = array();
+            foreach ($logs as $log) {
+                $data[$log->tag_id] = $log->count;
+            }
+            
+            wp_send_json_success($data);
+            
+        } catch (Exception $e) {
+            error_log('ETT Get Logs Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to get logs due to system error');
         }
-        
-        wp_send_json_success($data);
     }
     
     /**
-     * Break in
+     * Break in with database validation
      */
     public function ett_break_in() {
+        if (!$this->validate_database_connection()) {
+            return;
+        }
+        
         if (!isset($_POST['nonce']) || !$this->security->verify_nonce($_POST['nonce'], 'ett_break')) {
             wp_send_json_error('Security check failed');
             return;
@@ -329,19 +450,28 @@ class ETT_Ajax {
             return;
         }
         
-        $result = $this->database->start_break($employee_id);
-        
-        if ($result) {
-            wp_send_json_success('Break started successfully');
-        } else {
-            wp_send_json_error($this->database->get_last_error());
+        try {
+            $result = $this->database->start_break($employee_id);
+            
+            if ($result) {
+                wp_send_json_success('Break started successfully');
+            } else {
+                wp_send_json_error($this->database->get_last_error());
+            }
+        } catch (Exception $e) {
+            error_log('ETT Break In Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to start break due to system error');
         }
     }
     
     /**
-     * Break out
+     * Break out with database validation
      */
     public function ett_break_out() {
+        if (!$this->validate_database_connection()) {
+            return;
+        }
+        
         if (!isset($_POST['nonce']) || !$this->security->verify_nonce($_POST['nonce'], 'ett_break')) {
             wp_send_json_error('Security check failed');
             return;
@@ -366,19 +496,28 @@ class ETT_Ajax {
             return;
         }
         
-        $result = $this->database->end_break($employee_id);
-        
-        if ($result) {
-            wp_send_json_success('Break ended successfully');
-        } else {
-            wp_send_json_error($this->database->get_last_error());
+        try {
+            $result = $this->database->end_break($employee_id);
+            
+            if ($result) {
+                wp_send_json_success('Break ended successfully');
+            } else {
+                wp_send_json_error($this->database->get_last_error());
+            }
+        } catch (Exception $e) {
+            error_log('ETT Break Out Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to end break due to system error');
         }
     }
     
     /**
-     * Raise issue
+     * Raise issue with database validation
      */
     public function ett_raise_issue() {
+        if (!$this->validate_database_connection()) {
+            return;
+        }
+        
         if (!isset($_POST['nonce']) || !$this->security->verify_nonce($_POST['nonce'], 'ett_raise_issue')) {
             wp_send_json_error('Security check failed');
             return;
@@ -410,17 +549,22 @@ class ETT_Ajax {
             return;
         }
         
-        $result = $this->database->create_issue($employee_id, $category, $description);
-        
-        if ($result) {
-            wp_send_json_success('Issue raised successfully');
-        } else {
-            wp_send_json_error($this->database->get_last_error());
+        try {
+            $result = $this->database->create_issue($employee_id, $category, $description);
+            
+            if ($result) {
+                wp_send_json_success('Issue raised successfully');
+            } else {
+                wp_send_json_error($this->database->get_last_error());
+            }
+        } catch (Exception $e) {
+            error_log('ETT Raise Issue Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to raise issue due to system error');
         }
     }
     
     /**
-     * DELETE TAG - ADMIN ONLY
+     * DELETE TAG - ADMIN ONLY with database validation
      */
     public function ett_delete_tag() {
         if (!current_user_can('manage_options')) {
@@ -428,13 +572,12 @@ class ETT_Ajax {
             return;
         }
         
-        if (!isset($_POST['nonce']) || !$this->security->verify_nonce($_POST['nonce'], 'ett_delete_tag')) {
-            wp_send_json_error('Security check failed');
+        if (!$this->validate_database_connection()) {
             return;
         }
         
-        if (!$this->database->is_connected()) {
-            wp_send_json_error('Database connection error');
+        if (!isset($_POST['nonce']) || !$this->security->verify_nonce($_POST['nonce'], 'ett_delete_tag')) {
+            wp_send_json_error('Security check failed');
             return;
         }
         
@@ -447,35 +590,55 @@ class ETT_Ajax {
             return;
         }
         
-        // Check if tag is in use
-        $assignments_count = $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM {$wpdb->prefix}ett_assignments WHERE tag_id = %d",
-            $tag_id
-        ));
-        
-        $logs_count = $wpdb->get_var($wpdb->prepare(
-            "SELECT COUNT(*) FROM {$wpdb->prefix}ett_logs WHERE tag_id = %d",
-            $tag_id
-        ));
-        
-        if ($assignments_count > 0 || $logs_count > 0) {
-            wp_send_json_error('Cannot delete tag. It is assigned to employees or has logged data.');
-            return;
-        }
-        
-        if ($this->database->delete_tag($tag_id)) {
-            wp_send_json_success('Tag deleted successfully');
-        } else {
-            wp_send_json_error($this->database->get_last_error());
+        try {
+            // Check if tag is in use
+            $assignments_count = $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->prefix}ett_assignments WHERE tag_id = %d",
+                $tag_id
+            ));
+            
+            if ($wpdb->last_error) {
+                wp_send_json_error('Database error checking assignments: ' . $wpdb->last_error);
+                return;
+            }
+            
+            $logs_count = $wpdb->get_var($wpdb->prepare(
+                "SELECT COUNT(*) FROM {$wpdb->prefix}ett_logs WHERE tag_id = %d",
+                $tag_id
+            ));
+            
+            if ($wpdb->last_error) {
+                wp_send_json_error('Database error checking logs: ' . $wpdb->last_error);
+                return;
+            }
+            
+            if ($assignments_count > 0 || $logs_count > 0) {
+                wp_send_json_error('Cannot delete tag. It is assigned to employees or has logged data.');
+                return;
+            }
+            
+            if ($this->database->delete_tag($tag_id)) {
+                wp_send_json_success('Tag deleted successfully');
+            } else {
+                wp_send_json_error($this->database->get_last_error());
+            }
+            
+        } catch (Exception $e) {
+            error_log('ETT Delete Tag Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to delete tag due to system error');
         }
     }
     
     /**
-     * Delete employee - ADMIN ONLY
+     * Delete employee - ADMIN ONLY with database validation
      */
     public function ett_delete_employee() {
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Unauthorized access');
+            return;
+        }
+        
+        if (!$this->validate_database_connection()) {
             return;
         }
         
@@ -491,19 +654,28 @@ class ETT_Ajax {
             return;
         }
         
-        if ($this->database->delete_employee($employee_id)) {
-            wp_send_json_success('Employee deleted successfully');
-        } else {
-            wp_send_json_error($this->database->get_last_error());
+        try {
+            if ($this->database->delete_employee($employee_id)) {
+                wp_send_json_success('Employee deleted successfully');
+            } else {
+                wp_send_json_error($this->database->get_last_error());
+            }
+        } catch (Exception $e) {
+            error_log('ETT Delete Employee Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to delete employee due to system error');
         }
     }
     
     /**
-     * Delete assignment - ADMIN ONLY
+     * Delete assignment - ADMIN ONLY with database validation
      */
     public function ett_delete_assignment() {
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Unauthorized access');
+            return;
+        }
+        
+        if (!$this->validate_database_connection()) {
             return;
         }
         
@@ -521,23 +693,32 @@ class ETT_Ajax {
             return;
         }
         
-        $result = $wpdb->delete(
-            $wpdb->prefix . 'ett_assignments',
-            array('id' => $assignment_id),
-            array('%d')
-        );
-        
-        if ($result !== false && $result > 0) {
-            wp_send_json_success('Assignment deleted successfully');
-        } else {
-            wp_send_json_error('Failed to delete assignment');
+        try {
+            $result = $wpdb->delete(
+                $wpdb->prefix . 'ett_assignments',
+                array('id' => $assignment_id),
+                array('%d')
+            );
+            
+            if ($result !== false && $result > 0) {
+                wp_send_json_success('Assignment deleted successfully');
+            } else {
+                wp_send_json_error('Failed to delete assignment: ' . $wpdb->last_error);
+            }
+        } catch (Exception $e) {
+            error_log('ETT Delete Assignment Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to delete assignment due to system error');
         }
     }
     
     /**
-     * Dismiss warning
+     * Dismiss warning with database validation
      */
     public function ett_dismiss_warning() {
+        if (!$this->validate_database_connection()) {
+            return;
+        }
+        
         if (!isset($_POST['nonce']) || !$this->security->verify_nonce($_POST['nonce'], 'ett_dismiss_warning')) {
             wp_send_json_error('Security check failed');
             return;
@@ -552,27 +733,36 @@ class ETT_Ajax {
             return;
         }
         
-        $result = $wpdb->update(
-            $wpdb->prefix . 'ett_warnings',
-            array('is_active' => 0),
-            array('id' => $warning_id),
-            array('%d'),
-            array('%d')
-        );
-        
-        if ($result !== false) {
-            wp_send_json_success('Warning dismissed successfully');
-        } else {
-            wp_send_json_error('Failed to dismiss warning');
+        try {
+            $result = $wpdb->update(
+                $wpdb->prefix . 'ett_warnings',
+                array('is_active' => 0),
+                array('id' => $warning_id),
+                array('%d'),
+                array('%d')
+            );
+            
+            if ($result !== false) {
+                wp_send_json_success('Warning dismissed successfully');
+            } else {
+                wp_send_json_error('Failed to dismiss warning: ' . $wpdb->last_error);
+            }
+        } catch (Exception $e) {
+            error_log('ETT Dismiss Warning Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to dismiss warning due to system error');
         }
     }
     
     /**
-     * Update log - ADMIN ONLY
+     * Update log - ADMIN ONLY with database validation
      */
     public function ett_update_log() {
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Unauthorized access');
+            return;
+        }
+        
+        if (!$this->validate_database_connection()) {
             return;
         }
         
@@ -591,45 +781,59 @@ class ETT_Ajax {
             return;
         }
         
-        // Get log with tag information
-        $log = $wpdb->get_row($wpdb->prepare("
-            SELECT l.*, t.time_minutes 
-            FROM {$wpdb->prefix}ett_logs l
-            LEFT JOIN {$wpdb->prefix}ett_tags t ON l.tag_id = t.id
-            WHERE l.id = %d
-        ", $log_id));
-        
-        if (!$log) {
-            wp_send_json_error('Log not found');
-            return;
-        }
-        
-        $total_minutes = $count * $log->time_minutes;
-        
-        $result = $wpdb->update(
-            $wpdb->prefix . 'ett_logs',
-            array(
-                'count' => $count,
-                'total_minutes' => $total_minutes
-            ),
-            array('id' => $log_id),
-            array('%d', '%d'),
-            array('%d')
-        );
-        
-        if ($result !== false) {
-            wp_send_json_success('Log updated successfully');
-        } else {
-            wp_send_json_error('Failed to update log');
+        try {
+            // Get log with tag information
+            $log = $wpdb->get_row($wpdb->prepare("
+                SELECT l.*, t.time_minutes 
+                FROM {$wpdb->prefix}ett_logs l
+                LEFT JOIN {$wpdb->prefix}ett_tags t ON l.tag_id = t.id
+                WHERE l.id = %d
+            ", $log_id));
+            
+            if ($wpdb->last_error) {
+                wp_send_json_error('Database error getting log: ' . $wpdb->last_error);
+                return;
+            }
+            
+            if (!$log) {
+                wp_send_json_error('Log not found');
+                return;
+            }
+            
+            $total_minutes = $count * $log->time_minutes;
+            
+            $result = $wpdb->update(
+                $wpdb->prefix . 'ett_logs',
+                array(
+                    'count' => $count,
+                    'total_minutes' => $total_minutes
+                ),
+                array('id' => $log_id),
+                array('%d', '%d'),
+                array('%d')
+            );
+            
+            if ($result !== false) {
+                wp_send_json_success('Log updated successfully');
+            } else {
+                wp_send_json_error('Failed to update log: ' . $wpdb->last_error);
+            }
+        } catch (Exception $e) {
+            error_log('ETT Update Log Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to update log due to system error');
         }
     }
     
     /**
-     * Update issue status - ADMIN ONLY
+     * Update issue status - ADMIN ONLY with database validation
      */
     public function ett_update_issue_status() {
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Unauthorized access');
+            return;
+        }
+        
+        if (!$this->validate_database_connection()) {
             return;
         }
         
@@ -671,25 +875,34 @@ class ETT_Ajax {
             return;
         }
         
-        $result = $wpdb->update(
-            $wpdb->prefix . 'ett_issues',
-            $update_data,
-            array('id' => $issue_id)
-        );
-        
-        if ($result !== false) {
-            wp_send_json_success('Issue updated successfully');
-        } else {
-            wp_send_json_error('Failed to update issue');
+        try {
+            $result = $wpdb->update(
+                $wpdb->prefix . 'ett_issues',
+                $update_data,
+                array('id' => $issue_id)
+            );
+            
+            if ($result !== false) {
+                wp_send_json_success('Issue updated successfully');
+            } else {
+                wp_send_json_error('Failed to update issue: ' . $wpdb->last_error);
+            }
+        } catch (Exception $e) {
+            error_log('ETT Update Issue Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to update issue due to system error');
         }
     }
     
     /**
-     * Send break warning - ADMIN ONLY
+     * Send break warning - ADMIN ONLY with database validation
      */
     public function ett_send_break_warning() {
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Unauthorized access');
+            return;
+        }
+        
+        if (!$this->validate_database_connection()) {
             return;
         }
         
@@ -708,35 +921,49 @@ class ETT_Ajax {
             return;
         }
         
-        // Mark warning as sent for the break
-        $wpdb->update(
-            $wpdb->prefix . 'ett_breaks',
-            array('warning_sent' => 1),
-            array('id' => $break_id),
-            array('%d'),
-            array('%d')
-        );
-        
-        // Create warning record
-        $result = $this->database->create_warning(
-            $employee_id, 
-            'Break time exceeded 20 minutes limit',
-            date('Y-m-d')
-        );
-        
-        if ($result) {
-            wp_send_json_success('Warning sent successfully');
-        } else {
-            wp_send_json_error($this->database->get_last_error());
+        try {
+            // Mark warning as sent for the break
+            $wpdb->update(
+                $wpdb->prefix . 'ett_breaks',
+                array('warning_sent' => 1),
+                array('id' => $break_id),
+                array('%d'),
+                array('%d')
+            );
+            
+            if ($wpdb->last_error) {
+                wp_send_json_error('Database error updating break: ' . $wpdb->last_error);
+                return;
+            }
+            
+            // Create warning record
+            $result = $this->database->create_warning(
+                $employee_id, 
+                'Break time exceeded 20 minutes limit',
+                date('Y-m-d')
+            );
+            
+            if ($result) {
+                wp_send_json_success('Warning sent successfully');
+            } else {
+                wp_send_json_error($this->database->get_last_error());
+            }
+        } catch (Exception $e) {
+            error_log('ETT Send Break Warning Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to send warning due to system error');
         }
     }
     
     /**
-     * Send missing data warning - ADMIN ONLY
+     * Send missing data warning - ADMIN ONLY with database validation
      */
     public function ett_send_missing_data_warning() {
         if (!current_user_can('manage_options')) {
             wp_send_json_error('Unauthorized access');
+            return;
+        }
+        
+        if (!$this->validate_database_connection()) {
             return;
         }
         
@@ -758,16 +985,21 @@ class ETT_Ajax {
             return;
         }
         
-        $result = $this->database->create_warning(
-            $employee_id,
-            'Missing data submissions for dates: ' . $missing_dates,
-            date('Y-m-d')
-        );
-        
-        if ($result) {
-            wp_send_json_success('Warning sent successfully');
-        } else {
-            wp_send_json_error($this->database->get_last_error());
+        try {
+            $result = $this->database->create_warning(
+                $employee_id,
+                'Missing data submissions for dates: ' . $missing_dates,
+                date('Y-m-d')
+            );
+            
+            if ($result) {
+                wp_send_json_success('Warning sent successfully');
+            } else {
+                wp_send_json_error($this->database->get_last_error());
+            }
+        } catch (Exception $e) {
+            error_log('ETT Send Missing Data Warning Exception: ' . $e->getMessage());
+            wp_send_json_error('Failed to send warning due to system error');
         }
     }
 }
