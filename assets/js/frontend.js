@@ -1,5 +1,5 @@
 /**
- * Frontend JavaScript functionality
+ * Frontend JavaScript functionality - FIXED VERSION
  */
 (function($) {
     'use strict';
@@ -15,13 +15,22 @@
             this.bindEvents();
             this.initWorkLog();
             this.initBreakTimer();
+            this.validateFormOnLoad();
         },
         
+        /**
+         * Initialize real-time clock
+         */
         initClock: function() {
-            this.updateDateTime();
-            this.clockTimer = setInterval(this.updateDateTime, 1000);
+            if ($('#current-datetime').length > 0) {
+                this.updateDateTime();
+                this.clockTimer = setInterval(this.updateDateTime, 1000);
+            }
         },
         
+        /**
+         * Update date and time display
+         */
         updateDateTime: function() {
             var now = new Date();
             var options = { 
@@ -34,56 +43,100 @@
                 timeZone: 'Asia/Kolkata',
                 timeZoneName: 'short'
             };
-            $('#current-datetime').text(now.toLocaleString('en-IN', options));
+            
+            try {
+                var formattedTime = now.toLocaleString('en-IN', options);
+                $('#current-datetime').text(formattedTime);
+            } catch (e) {
+                // Fallback for older browsers
+                $('#current-datetime').text(now.toLocaleString());
+            }
         },
         
+        /**
+         * Bind all event handlers
+         */
         bindEvents: function() {
             // Login form
-            $('#ett-login-form').on('submit', this.handleLogin);
+            $('#ett-login-form').on('submit', this.handleLogin.bind(this));
             
             // Logout button
-            $('#ett-logout-btn').on('click', this.handleLogout);
+            $('#ett-logout-btn').on('click', this.handleLogout.bind(this));
             
             // Work log form
-            $('#ett-work-log-form').on('submit', this.handleWorkLogSubmit);
+            $('#ett-work-log-form').on('submit', this.handleWorkLogSubmit.bind(this));
             
             // Count input changes
-            $('.ett-count-input').on('input', this.calculateTotals);
+            $(document).on('input', '.ett-count-input', this.calculateTotals.bind(this));
             
             // Date selection
-            $('#date-selection-form').on('submit', this.handleDateChange);
+            $('#date-selection-form').on('submit', this.handleDateChange.bind(this));
             
             // Break controls
-            $('#break-in-btn').on('click', this.handleBreakIn);
-            $('#break-out-btn').on('click', this.handleBreakOut);
+            $('#break-in-btn').on('click', this.handleBreakIn.bind(this));
+            $('#break-out-btn').on('click', this.handleBreakOut.bind(this));
             
             // Issue form
-            $('#ett-issue-form').on('submit', this.handleIssueSubmit);
+            $('#ett-issue-form').on('submit', this.handleIssueSubmit.bind(this));
             
             // Warning dismissal
-            $('.dismiss-warning-btn').on('click', this.dismissWarning);
+            $('.dismiss-warning-btn').on('click', this.dismissWarning.bind(this));
         },
         
+        /**
+         * Validate forms on page load
+         */
+        validateFormOnLoad: function() {
+            // Check if jQuery and required functions are available
+            if (typeof $ === 'undefined') {
+                console.error('ETT: jQuery is not loaded');
+                return;
+            }
+            
+            // Validate AJAX URL
+            if (typeof ettFrontend === 'undefined' || !ettFrontend.ajaxurl) {
+                console.error('ETT: AJAX configuration missing');
+                return;
+            }
+            
+            console.log('ETT Frontend initialized successfully');
+        },
+        
+        /**
+         * Initialize work log functionality
+         */
         initWorkLog: function() {
-            this.calculateTotals();
-            this.loadExistingData();
+            if ($('.ett-count-input').length > 0) {
+                this.calculateTotals();
+                this.loadExistingData();
+            }
         },
         
+        /**
+         * Initialize break timer
+         */
         initBreakTimer: function() {
             if ($('#break-duration').length > 0) {
                 this.updateBreakDuration();
-                this.breakTimer = setInterval(this.updateBreakDuration, 1000);
+                this.breakTimer = setInterval(this.updateBreakDuration.bind(this), 1000);
             }
         },
         
+        /**
+         * Handle employee login
+         */
         handleLogin: function(e) {
             e.preventDefault();
-            var employeeCode = $('#employee_code').val();
+            
+            var employeeCode = $('#employee_code').val().trim();
             
             if (!employeeCode) {
-                ETTFrontend.showMessage('Please enter employee code', 'error');
+                this.showMessage('Please enter employee code', 'error', '#ett-login-message');
                 return;
             }
+            
+            var $submitBtn = $('#ett-login-form button');
+            var originalText = $submitBtn.text();
             
             $.ajax({
                 url: ettFrontend.ajaxurl,
@@ -94,21 +147,30 @@
                     nonce: ettFrontend.nonces.login
                 },
                 beforeSend: function() {
-                    $('#ett-login-form button').prop('disabled', true).text('Logging in...');
+                    $submitBtn.prop('disabled', true).text('Logging in...');
                 },
                 success: function(response) {
                     if (response.success) {
-                        location.reload();
+                        ETTFrontend.showMessage('Login successful! Redirecting...', 'success', '#ett-login-message');
+                        setTimeout(function() {
+                            location.reload();
+                        }, 1000);
                     } else {
-                        ETTFrontend.showMessage(response.data, 'error', '#ett-login-message');
+                        ETTFrontend.showMessage(response.data || 'Login failed', 'error', '#ett-login-message');
                     }
                 },
+                error: function(xhr, status, error) {
+                    ETTFrontend.showMessage('Network error: ' + error, 'error', '#ett-login-message');
+                },
                 complete: function() {
-                    $('#ett-login-form button').prop('disabled', false).text('Login');
+                    $submitBtn.prop('disabled', false).text(originalText);
                 }
             });
         },
         
+        /**
+         * Handle employee logout
+         */
         handleLogout: function(e) {
             e.preventDefault();
             
@@ -126,25 +188,38 @@
                 success: function(response) {
                     if (response.success) {
                         location.reload();
+                    } else {
+                        alert('Logout failed: ' + (response.data || 'Unknown error'));
                     }
+                },
+                error: function() {
+                    alert('Network error during logout');
                 }
             });
         },
         
+        /**
+         * Handle work log submission
+         */
         handleWorkLogSubmit: function(e) {
             e.preventDefault();
             
-            if (!confirm('Once submitted, this data will be locked. Continue?')) {
+            if (!confirm('Once submitted, this data will be locked and cannot be edited. Continue?')) {
                 return;
             }
             
             var logs = [];
             var missingMandatory = false;
+            var hasAnyData = false;
             
             $('.ett-count-input').each(function() {
                 var count = parseInt($(this).val()) || 0;
                 var tagId = $(this).data('tag-id');
                 var isMandatory = $(this).data('mandatory') == '1';
+                
+                if (count > 0) {
+                    hasAnyData = true;
+                }
                 
                 if (isMandatory && count === 0) {
                     missingMandatory = true;
@@ -156,14 +231,28 @@
                 });
             });
             
+            // Check if any data is entered
+            if (!hasAnyData) {
+                alert('Please enter data for at least one tag before submitting.');
+                return;
+            }
+            
             if (missingMandatory) {
-                if (!confirm('Warning: You have missed some mandatory tags. Continue?')) {
+                if (!confirm('Warning: You have missed some mandatory tags. This will create a warning. Continue?')) {
                     return;
                 }
             }
             
             var employeeId = $('#employee_id').val();
             var logDate = $('#selected_log_date').val();
+            
+            if (!employeeId || !logDate) {
+                alert('Missing employee or date information');
+                return;
+            }
+            
+            var $submitBtn = $('#ett-work-log-form button');
+            var originalText = $submitBtn.text();
             
             $.ajax({
                 url: ettFrontend.ajaxurl,
@@ -176,7 +265,7 @@
                     nonce: ettFrontend.nonces.save_log
                 },
                 beforeSend: function() {
-                    $('#ett-work-log-form button').prop('disabled', true).text('Submitting...');
+                    $submitBtn.prop('disabled', true).text('Submitting...');
                 },
                 success: function(response) {
                     if (response.success) {
@@ -188,12 +277,18 @@
                         ETTFrontend.showMessage('❌ ' + response.data, 'error', '#ett-message');
                     }
                 },
+                error: function(xhr, status, error) {
+                    ETTFrontend.showMessage('❌ Network error: ' + error, 'error', '#ett-message');
+                },
                 complete: function() {
-                    $('#ett-work-log-form button').prop('disabled', false).text('Submit & Lock Work Log');
+                    $submitBtn.prop('disabled', false).text(originalText);
                 }
             });
         },
         
+        /**
+         * Calculate totals dynamically
+         */
         calculateTotals: function() {
             var grandTotal = 0;
             
@@ -203,15 +298,40 @@
                 var total = count * time;
                 var tagId = $(this).data('tag-id');
                 
+                // Update individual total
                 $('.ett-total-time[data-tag-id="' + tagId + '"]').text(total + ' min');
                 grandTotal += total;
+                
+                // Visual feedback for mandatory fields
+                var isMandatory = $(this).data('mandatory') == '1';
+                if (isMandatory) {
+                    if (count === 0) {
+                        $(this).addClass('missing-mandatory');
+                    } else {
+                        $(this).removeClass('missing-mandatory');
+                    }
+                }
             });
             
+            // Update grand total
             var hours = Math.floor(grandTotal / 60);
             var minutes = grandTotal % 60;
             $('#ett-grand-total').text(hours + ' hours ' + minutes + ' minutes');
+            
+            // Color coding for total time
+            var $grandTotal = $('#ett-grand-total');
+            if (grandTotal >= 480) { // 8 hours
+                $grandTotal.css('color', '#28a745'); // Green
+            } else if (grandTotal >= 360) { // 6 hours
+                $grandTotal.css('color', '#ffc107'); // Yellow
+            } else {
+                $grandTotal.css('color', '#dc3545'); // Red
+            }
         },
         
+        /**
+         * Load existing data for selected date
+         */
         loadExistingData: function() {
             var employeeId = $('#employee_id').val();
             var logDate = $('#selected_log_date').val();
@@ -234,18 +354,37 @@
                         });
                         ETTFrontend.calculateTotals();
                     }
+                },
+                error: function() {
+                    console.log('ETT: Failed to load existing data');
                 }
             });
         },
         
+        /**
+         * Handle date change
+         */
         handleDateChange: function(e) {
-            // Form will submit naturally, just add loading state
-            $(this).find('button').prop('disabled', true).text('Loading...');
+            var $btn = $(this).find('button');
+            $btn.prop('disabled', true).text('Loading...');
+            // Form will submit naturally
         },
         
+        /**
+         * Handle break in
+         */
         handleBreakIn: function(e) {
             e.preventDefault();
+            
             var employeeId = $('#employee_id').val();
+            
+            if (!employeeId) {
+                alert('Employee ID not found');
+                return;
+            }
+            
+            var $btn = $('#break-in-btn');
+            var originalText = $btn.text();
             
             $.ajax({
                 url: ettFrontend.ajaxurl,
@@ -256,24 +395,39 @@
                     nonce: ettFrontend.nonces.break
                 },
                 beforeSend: function() {
-                    $('#break-in-btn').prop('disabled', true).text('Starting...');
+                    $btn.prop('disabled', true).text('Starting...');
                 },
                 success: function(response) {
                     if (response.success) {
                         location.reload();
                     } else {
-                        ETTFrontend.showMessage(response.data, 'error');
+                        alert('Failed to start break: ' + response.data);
                     }
                 },
+                error: function() {
+                    alert('Network error occurred');
+                },
                 complete: function() {
-                    $('#break-in-btn').prop('disabled', false).text('Break In');
+                    $btn.prop('disabled', false).text(originalText);
                 }
             });
         },
         
+        /**
+         * Handle break out
+         */
         handleBreakOut: function(e) {
             e.preventDefault();
+            
             var employeeId = $('#employee_id').val();
+            
+            if (!employeeId) {
+                alert('Employee ID not found');
+                return;
+            }
+            
+            var $btn = $('#break-out-btn');
+            var originalText = $btn.text();
             
             $.ajax({
                 url: ettFrontend.ajaxurl,
@@ -284,37 +438,54 @@
                     nonce: ettFrontend.nonces.break
                 },
                 beforeSend: function() {
-                    $('#break-out-btn').prop('disabled', true).text('Ending...');
+                    $btn.prop('disabled', true).text('Ending...');
                 },
                 success: function(response) {
                     if (response.success) {
                         location.reload();
                     } else {
-                        ETTFrontend.showMessage(response.data, 'error');
+                        alert('Failed to end break: ' + response.data);
                     }
                 },
+                error: function() {
+                    alert('Network error occurred');
+                },
                 complete: function() {
-                    $('#break-out-btn').prop('disabled', false).text('Break Out');
+                    $btn.prop('disabled', false).text(originalText);
                 }
             });
         },
         
+        /**
+         * Update break duration (for active breaks)
+         */
         updateBreakDuration: function() {
-            // This would be implemented with actual break start time
-            // Placeholder for break duration calculation
+            // This would be implemented with server-side break start time
+            // For now, this is a placeholder
         },
         
+        /**
+         * Handle issue submission
+         */
         handleIssueSubmit: function(e) {
             e.preventDefault();
             
             var category = $('#issue-category').val();
-            var description = $('#issue-description').val();
+            var description = $('#issue-description').val().trim();
             var employeeId = $('#employee_id').val();
             
             if (!category || !description) {
-                ETTFrontend.showMessage('Please fill all fields', 'error');
+                this.showMessage('Please fill all fields', 'error');
                 return;
             }
+            
+            if (description.length < 10) {
+                this.showMessage('Please provide a more detailed description (at least 10 characters)', 'error');
+                return;
+            }
+            
+            var $submitBtn = $('#ett-issue-form button');
+            var originalText = $submitBtn.text();
             
             $.ajax({
                 url: ettFrontend.ajaxurl,
@@ -327,7 +498,7 @@
                     nonce: ettFrontend.nonces.raise_issue
                 },
                 beforeSend: function() {
-                    $('#ett-issue-form button').prop('disabled', true).text('Submitting...');
+                    $submitBtn.prop('disabled', true).text('Submitting...');
                 },
                 success: function(response) {
                     if (response.success) {
@@ -338,18 +509,34 @@
                             location.reload();
                         }, 2000);
                     } else {
-                        ETTFrontend.showMessage('Failed to submit issue', 'error');
+                        ETTFrontend.showMessage('Failed to submit issue: ' + response.data, 'error');
                     }
                 },
+                error: function() {
+                    ETTFrontend.showMessage('Network error occurred', 'error');
+                },
                 complete: function() {
-                    $('#ett-issue-form button').prop('disabled', false).text('Submit Issue');
+                    $submitBtn.prop('disabled', false).text(originalText);
                 }
             });
         },
         
+        /**
+         * Dismiss warning
+         */
         dismissWarning: function(e) {
             e.preventDefault();
+            
             var warningId = $(this).data('warning-id');
+            
+            if (!warningId) {
+                alert('Warning ID not found');
+                return;
+            }
+            
+            if (!confirm('Are you sure you want to dismiss this warning?')) {
+                return;
+            }
             
             $.ajax({
                 url: ettFrontend.ajaxurl,
@@ -362,11 +549,19 @@
                 success: function(response) {
                     if (response.success) {
                         location.reload();
+                    } else {
+                        alert('Failed to dismiss warning: ' + response.data);
                     }
+                },
+                error: function() {
+                    alert('Network error occurred');
                 }
             });
         },
         
+        /**
+         * Show message to user
+         */
         showMessage: function(message, type, target) {
             target = target || '#ett-message';
             var className = type === 'success' ? 'ett-success' : 'ett-error';
@@ -376,6 +571,21 @@
             setTimeout(function() {
                 $(target).html('');
             }, 5000);
+        },
+        
+        /**
+         * Cleanup function
+         */
+        destroy: function() {
+            if (this.clockTimer) {
+                clearInterval(this.clockTimer);
+                this.clockTimer = null;
+            }
+            
+            if (this.breakTimer) {
+                clearInterval(this.breakTimer);
+                this.breakTimer = null;
+            }
         }
     };
     
@@ -383,5 +593,13 @@
     $(document).ready(function() {
         ETTFrontend.init();
     });
+    
+    // Cleanup on page unload
+    $(window).on('beforeunload', function() {
+        ETTFrontend.destroy();
+    });
+    
+    // Make available globally for debugging
+    window.ETTFrontend = ETTFrontend;
     
 })(jQuery);

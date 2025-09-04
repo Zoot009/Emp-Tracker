@@ -284,6 +284,29 @@
     font-weight: 600;
 }
 
+/* Missing mandatory field highlighting */
+.missing-mandatory {
+    border-color: var(--danger-color) !important;
+    background-color: #fef2f2 !important;
+    box-shadow: 0 0 0 3px rgb(239 68 68 / 0.1) !important;
+}
+
+.missing-mandatory:focus {
+    border-color: var(--danger-color) !important;
+    box-shadow: 0 0 0 3px rgb(239 68 68 / 0.2) !important;
+}
+
+/* Enhanced form validation */
+.ett-form-error {
+    border-color: var(--danger-color) !important;
+    background-color: #fef2f2;
+}
+
+.ett-form-success {
+    border-color: var(--success-color) !important;
+    background-color: #f0fdf4;
+}
+
 /* Table Styles */
 .ett-public-table,
 .ett-work-table {
@@ -491,11 +514,25 @@
     letter-spacing: 0.05em;
 }
 
-/* Loading States */
+/* Loading states */
 .ett-loading {
     opacity: 0.6;
     pointer-events: none;
     position: relative;
+}
+
+.ett-loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    margin: -10px 0 0 -10px;
+    border: 2px solid var(--border-color);
+    border-top: 2px solid var(--primary-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
 }
 
 .ett-spinner {
@@ -529,6 +566,65 @@
     color: var(--primary-color);
     font-size: 1.125rem;
     font-weight: 600;
+}
+
+/* Locked Notice */
+.ett-locked-notice {
+    background: linear-gradient(135deg, #fef3c7, #fde68a);
+    border: 2px solid var(--warning-color);
+    border-radius: var(--radius-lg);
+    padding: 2rem;
+    margin: 2rem 0;
+    text-align: center;
+    box-shadow: var(--shadow-md);
+}
+
+.ett-locked-notice h3 {
+    margin: 0 0 1rem 0;
+    color: #92400e;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.ett-locked-notice p {
+    margin: 0.5rem 0;
+    color: #92400e;
+}
+
+/* Break Section Styles */
+.ett-break-section {
+    margin-bottom: 2rem;
+}
+
+.ett-todays-breaks h4 {
+    margin: 1rem 0 0.5rem 0;
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+/* Issue Section Styles */
+.ett-issue-section {
+    margin-bottom: 2rem;
+}
+
+.ett-recent-issues h4 {
+    margin: 1rem 0 0.5rem 0;
+    color: var(--text-primary);
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+/* Submission History Styles */
+.ett-submission-history {
+    margin-bottom: 2rem;
+}
+
+/* Form Actions */
+.ett-form-actions {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
 }
 
 /* Responsive Design */
