@@ -1,6 +1,7 @@
 <?php
 /**
- * Tags Management Page
+ * Updated Tags Management Page with Working Delete
+ * File: templates/admin/tags.php
  */
 
 if (!defined('ABSPATH')) {
@@ -25,19 +26,14 @@ if (isset($_POST['add_tag']) && wp_verify_nonce($_POST['_wpnonce'], 'ett_add_tag
     }
 }
 
-// Handle deletion
-if (isset($_GET['delete']) && wp_verify_nonce($_GET['_wpnonce'], 'ett_delete_tag')) {
-    $tag_id = intval($_GET['delete']);
-    if ($database->delete_tag($tag_id)) {
-        echo '<div class="notice notice-success"><p>Tag deleted successfully!</p></div>';
-    }
-}
-
 $tags = $database->get_all_tags();
 ?>
 
 <div class="wrap">
     <h1>Manage Tags</h1>
+    
+    <!-- Hidden nonce fields for AJAX -->
+    <input type="hidden" id="ett_delete_tag_nonce" value="<?php echo wp_create_nonce('ett_delete_tag'); ?>" />
     
     <div class="ett-card">
         <div class="ett-card-header">
@@ -81,30 +77,86 @@ $tags = $database->get_all_tags();
                         <th scope="col" class="manage-column">Tag Name</th>
                         <th scope="col" class="manage-column">Time per Unit</th>
                         <th scope="col" class="manage-column">Created</th>
+                        <th scope="col" class="manage-column">Usage</th>
                         <th scope="col" class="manage-column">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($tags as $tag): ?>
-                    <tr>
+                    <?php foreach ($tags as $tag): 
+                        global $wpdb;
+                        
+                        // Check usage
+                        $assignments_count = $wpdb->get_var($wpdb->prepare(
+                            "SELECT COUNT(*) FROM {$wpdb->prefix}ett_assignments WHERE tag_id = %d",
+                            $tag->id
+                        ));
+                        
+                        $logs_count = $wpdb->get_var($wpdb->prepare(
+                            "SELECT COUNT(*) FROM {$wpdb->prefix}ett_logs WHERE tag_id = %d",
+                            $tag->id
+                        ));
+                        
+                        $can_delete = ($assignments_count == 0 && $logs_count == 0);
+                    ?>
+                    <tr id="tag-row-<?php echo $tag->id; ?>">
                         <td><?php echo $tag->id; ?></td>
                         <td><strong><?php echo $security->escape_html($tag->tag_name); ?></strong></td>
                         <td><?php echo $tag->time_minutes; ?> minutes</td>
                         <td><?php echo date('M j, Y', strtotime($tag->created_at)); ?></td>
                         <td>
-                            <a href="<?php echo wp_nonce_url(
-                                admin_url('admin.php?page=ett-tags&delete=' . $tag->id),
-                                'ett_delete_tag'
-                            ); ?>" 
-                               onclick="return confirm('Are you sure you want to delete this tag? This will affect all assignments and logs.')" 
-                               class="button button-small button-link-delete">Delete</a>
+                            <?php if ($assignments_count > 0 || $logs_count > 0): ?>
+                                <span class="ett-badge ett-badge-warning">
+                                    <?php echo $assignments_count; ?> assignments, <?php echo $logs_count; ?> logs
+                                </span>
+                            <?php else: ?>
+                                <span class="ett-badge ett-badge-success">Not in use</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php if ($can_delete): ?>
+                                <button class="button button-small button-link-delete delete-tag-btn" 
+                                        data-tag-id="<?php echo $tag->id; ?>"
+                                        data-tag-name="<?php echo $security->escape_attr($tag->tag_name); ?>">
+                                    Delete
+                                </button>
+                            <?php else: ?>
+                                <span style="color: #999;" title="Cannot delete - tag is in use">Cannot Delete</span>
+                            <?php endif; ?>
                         </td>
                     </tr>
                     <?php endforeach; ?>
                 </tbody>
             </table>
         <?php else: ?>
-            <p>No tags found. Add your first tag above.</p>
+            <div class="ett-alert ett-alert-info">
+                <p>No tags found. Add your first tag above.</p>
+            </div>
         <?php endif; ?>
     </div>
 </div>
+
+<style>
+.ett-badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+}
+
+.ett-badge-success {
+    background: #d4edda;
+    color: #155724;
+}
+
+.ett-badge-warning {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.ett-badge-info {
+    background: #d1ecf1;
+    color: #0c5460;
+}
+</style>

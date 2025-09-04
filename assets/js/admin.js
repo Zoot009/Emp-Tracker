@@ -1,5 +1,6 @@
 /**
- * Admin JavaScript functionality
+ * Updated Admin JavaScript with Delete Functionality
+ * File: assets/js/admin.js
  */
 (function($) {
     'use strict';
@@ -13,6 +14,11 @@
         },
         
         bindEvents: function() {
+            // Delete functions
+            $('.delete-tag-btn').on('click', this.deleteTag);
+            $('.delete-employee-btn').on('click', this.deleteEmployee);
+            $('.delete-assignment-btn').on('click', this.deleteAssignment);
+            
             // Warning dismissal
             $('.ett-dismiss-warning').on('click', this.dismissWarning);
             
@@ -33,6 +39,114 @@
             
             // Form submissions
             $('.ett-admin-form').on('submit', this.handleFormSubmit);
+        },
+        
+        deleteTag: function(e) {
+            e.preventDefault();
+            var $btn = $(this);
+            var tagId = $btn.data('tag-id');
+            var tagName = $btn.data('tag-name');
+            
+            if (!confirm('Are you sure you want to delete the tag "' + tagName + '"? This action cannot be undone.')) {
+                return;
+            }
+            
+            $.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: {
+                    action: 'ett_delete_tag',
+                    tag_id: tagId,
+                    nonce: $('#ett_delete_tag_nonce').val()
+                },
+                beforeSend: function() {
+                    $btn.prop('disabled', true).text('Deleting...');
+                },
+                success: function(response) {
+                    if (response.success) {
+                        $btn.closest('tr').fadeOut(function() {
+                            $(this).remove();
+                        });
+                        ETTAdmin.showNotice('Tag deleted successfully', 'success');
+                    } else {
+                        ETTAdmin.showNotice('Failed to delete tag: ' + response.data, 'error');
+                        $btn.prop('disabled', false).text('Delete');
+                    }
+                },
+                error: function() {
+                    ETTAdmin.showNotice('Network error occurred', 'error');
+                    $btn.prop('disabled', false).text('Delete');
+                }
+            });
+        },
+        
+        deleteEmployee: function(e) {
+            e.preventDefault();
+            var $btn = $(this);
+            var employeeId = $btn.data('employee-id');
+            var employeeName = $btn.data('employee-name');
+            
+            if (!confirm('Are you sure you want to delete "' + employeeName + '"? This will also delete all their logs and assignments.')) {
+                return;
+            }
+            
+            $.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: {
+                    action: 'ett_delete_employee',
+                    employee_id: employeeId,
+                    nonce: $('#ett_delete_employee_nonce').val()
+                },
+                beforeSend: function() {
+                    $btn.prop('disabled', true).text('Deleting...');
+                },
+                success: function(response) {
+                    if (response.success) {
+                        $btn.closest('tr').fadeOut(function() {
+                            $(this).remove();
+                        });
+                        ETTAdmin.showNotice('Employee deleted successfully', 'success');
+                    } else {
+                        ETTAdmin.showNotice('Failed to delete employee: ' + response.data, 'error');
+                        $btn.prop('disabled', false).text('Delete');
+                    }
+                }
+            });
+        },
+        
+        deleteAssignment: function(e) {
+            e.preventDefault();
+            var $btn = $(this);
+            var assignmentId = $btn.data('assignment-id');
+            
+            if (!confirm('Are you sure you want to delete this assignment?')) {
+                return;
+            }
+            
+            $.ajax({
+                url: ajaxurl,
+                type: 'POST',
+                data: {
+                    action: 'ett_delete_assignment',
+                    assignment_id: assignmentId,
+                    nonce: $('#ett_delete_assignment_nonce').val()
+                },
+                beforeSend: function() {
+                    $btn.prop('disabled', true).text('Deleting...');
+                },
+                success: function(response) {
+                    if (response.success) {
+                        $btn.closest('tr').fadeOut(function() {
+                            $(this).remove();
+                        });
+                        ETTAdmin.showNotice('Assignment deleted successfully', 'success');
+                    } else {
+                        ETTAdmin.showNotice('Failed to delete assignment: ' + response.data, 'error');
+                        $btn.prop('disabled', false).text('Delete');
+                    }
+                }
+            });
         },
         
         initModals: function() {
@@ -62,12 +176,12 @@
             var warningId = $btn.data('warning-id');
             
             $.ajax({
-                url: ettAdmin.ajaxurl,
+                url: ajaxurl,
                 type: 'POST',
                 data: {
                     action: 'ett_dismiss_warning',
                     warning_id: warningId,
-                    nonce: ettAdmin.nonce
+                    nonce: $('#ett_dismiss_warning_nonce').val()
                 },
                 beforeSend: function() {
                     $btn.prop('disabled', true).text('Dismissing...');
@@ -97,20 +211,20 @@
             }
             
             $.ajax({
-                url: ettAdmin.ajaxurl,
+                url: ajaxurl,
                 type: 'POST',
                 data: {
                     action: 'ett_send_missing_data_warning',
                     employee_id: employeeId,
                     missing_dates: missingDates,
-                    nonce: ettAdmin.nonce
+                    nonce: $('#ett_send_warning_nonce').val()
                 },
                 beforeSend: function() {
                     $btn.prop('disabled', true).text('Sending...');
                 },
                 success: function(response) {
                     if (response.success) {
-                        $btn.text('Warning Sent').addClass('ett-btn-success');
+                        $btn.text('Warning Sent').addClass('button-primary');
                         ETTAdmin.showNotice('Warning sent successfully', 'success');
                     } else {
                         ETTAdmin.showNotice('Failed to send warning', 'error');
@@ -127,20 +241,20 @@
             var breakId = $btn.data('break-id');
             
             $.ajax({
-                url: ettAdmin.ajaxurl,
+                url: ajaxurl,
                 type: 'POST',
                 data: {
                     action: 'ett_send_break_warning',
                     employee_id: employeeId,
                     break_id: breakId,
-                    nonce: ettAdmin.nonce
+                    nonce: $('#ett_send_break_warning_nonce').val()
                 },
                 beforeSend: function() {
                     $btn.prop('disabled', true).text('Sending...');
                 },
                 success: function(response) {
                     if (response.success) {
-                        $btn.text('Warning Sent').addClass('ett-btn-success');
+                        $btn.text('Warning Sent').css('color', '#28a745');
                         ETTAdmin.showNotice('Break warning sent successfully', 'success');
                     } else {
                         ETTAdmin.showNotice('Failed to send warning', 'error');
@@ -156,13 +270,13 @@
             var status = $select.val();
             
             $.ajax({
-                url: ettAdmin.ajaxurl,
+                url: ajaxurl,
                 type: 'POST',
                 data: {
                     action: 'ett_update_issue_status',
                     issue_id: issueId,
                     status: status,
-                    nonce: ettAdmin.nonce
+                    nonce: $('#ett_update_issue_nonce').val()
                 },
                 success: function(response) {
                     if (response.success) {
@@ -208,13 +322,13 @@
             var response = $('#admin-response').val();
             
             $.ajax({
-                url: ettAdmin.ajaxurl,
+                url: ajaxurl,
                 type: 'POST',
                 data: {
                     action: 'ett_update_issue_status',
                     issue_id: issueId,
                     admin_response: response,
-                    nonce: ettAdmin.nonce
+                    nonce: $('#ett_update_issue_nonce').val()
                 },
                 success: function(response) {
                     if (response.success) {
@@ -236,13 +350,13 @@
             var totalMinutes = count * timePerUnit;
             
             $.ajax({
-                url: ettAdmin.ajaxurl,
+                url: ajaxurl,
                 type: 'POST',
                 data: {
                     action: 'ett_update_log',
                     log_id: logId,
                     count: count,
-                    nonce: ettAdmin.nonce
+                    nonce: $('#ett_update_log_nonce').val()
                 },
                 beforeSend: function() {
                     $btn.prop('disabled', true).text('Updating...');
