@@ -1,296 +1,450 @@
 <?php
 /**
- * AJAX request handler - FIXED VERSION
+ * Complete AJAX Handler Implementation - Missing Functions
  */
 
-class ETT_Ajax {
-    
-    private $database;
-    private $security;
-    
-    public function __construct($database, $security) {
-        $this->database = $database;
-        $this->security = $security;
+// Add these methods to the ETT_Ajax class
+
+/**
+ * Dismiss warning
+ */
+public function ett_dismiss_warning() {
+    if (!$this->security->verify_nonce($_POST['nonce'], 'ett_dismiss_warning')) {
+        wp_send_json_error('Invalid nonce');
     }
     
-    /**
-     * Initialize all AJAX handlers
-     */
-    public function init_ajax_handlers() {
-        // Ensure session is started for login
-        add_action('wp_ajax_ett_employee_login', array($this, 'ensure_session_and_handle'));
-        add_action('wp_ajax_nopriv_ett_employee_login', array($this, 'ensure_session_and_handle'));
-        
-        // Frontend actions (available to all users)
-        $frontend_actions = array(
-            'ett_save_log', 'ett_employee_logout', 'ett_get_logs_by_date',
-            'ett_dismiss_warning', 'ett_check_lock_status', 'ett_break_in',
-            'ett_break_out', 'ett_get_break_status', 'ett_raise_issue',
-            'ett_get_employee_issues'
-        );
-        
-        foreach ($frontend_actions as $action) {
-            add_action('wp_ajax_' . $action, array($this, $action));
-            add_action('wp_ajax_nopriv_' . $action, array($this, $action));
-        }
-        
-        // Admin-only actions
-        $admin_actions = array(
-            'ett_update_employee', 'ett_update_tag', 'ett_update_assignment',
-            'ett_edit_log', 'ett_send_warning', 'ett_remove_warning',
-            'ett_update_issue_status', 'ett_send_break_warning',
-            'ett_send_missing_data_warning', 'ett_update_log'
-        );
-        
-        foreach ($admin_actions as $action) {
-            add_action('wp_ajax_' . $action, array($this, $action));
-        }
+    global $wpdb;
+    
+    $warning_id = $this->security->sanitize_int($_POST['warning_id']);
+    
+    $result = $wpdb->update(
+        $wpdb->prefix . 'ett_warnings',
+        array('is_active' => 0),
+        array('id' => $warning_id),
+        array('%d'),
+        array('%d')
+    );
+    
+    if ($result !== false) {
+        wp_send_json_success('Warning dismissed');
+    } else {
+        wp_send_json_error('Failed to dismiss warning');
+    }
+}
+
+/**
+ * Check lock status
+ */
+public function ett_check_lock_status() {
+    $this->security->start_session();
+    
+    $employee_id = $this->security->sanitize_int($_POST['employee_id']);
+    $log_date = $this->security->sanitize_text($_POST['log_date']);
+    
+    global $wpdb;
+    $submission = $wpdb->get_row($wpdb->prepare("
+        SELECT * FROM {$wpdb->prefix}ett_submission_status 
+        WHERE employee_id = %d AND submission_date = %s AND is_locked = 1
+    ", $employee_id, $log_date));
+    
+    wp_send_json_success(array('is_locked' => !empty($submission)));
+}
+
+/**
+ * Get break status
+ */
+public function ett_get_break_status() {
+    global $wpdb;
+    
+    $employee_id = $this->security->sanitize_int($_POST['employee_id']);
+    
+    $active_break = $wpdb->get_row($wpdb->prepare("
+        SELECT * FROM {$wpdb->prefix}ett_breaks 
+        WHERE employee_id = %d AND is_active = 1
+    ", $employee_id));
+    
+    if ($active_break) {
+        wp_send_json_success(array('on_break' => true, 'break_data' => $active_break));
+    } else {
+        wp_send_json_success(array('on_break' => false));
+    }
+}
+
+/**
+ * Get employee issues
+ */
+public function ett_get_employee_issues() {
+    global $wpdb;
+    
+    $employee_id = $this->security->sanitize_int($_POST['employee_id']);
+    
+    $issues = $wpdb->get_results($wpdb->prepare("
+        SELECT * FROM {$wpdb->prefix}ett_issues 
+        WHERE employee_id = %d 
+        ORDER BY raised_date DESC
+        LIMIT 10
+    ", $employee_id));
+    
+    wp_send_json_success($issues);
+}
+
+/**
+ * Update issue status
+ */
+public function ett_update_issue_status() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
     }
     
-    /**
-     * Ensure session is started before handling login
-     */
-    public function ensure_session_and_handle() {
-        $this->security->start_session();
-        $this->ett_employee_login();
+    if (!$this->security->verify_nonce($_POST['nonce'], 'ett_update_issue')) {
+        wp_send_json_error('Invalid nonce');
     }
     
-    /**
-     * Employee login - FIXED
-     */
-    public function ett_employee_login() {
-        // Verify nonce
-        if (!$this->security->verify_nonce($_POST['nonce'], 'ett_employee_login')) {
-            wp_send_json_error('Invalid security token');
-        }
-        
-        // Get and validate input
-        $employee_code = $this->security->sanitize_employee_code($_POST['employee_code']);
-        
-        if (empty($employee_code)) {
-            wp_send_json_error('Employee code is required');
-        }
-        
-        // Get employee from database
-        $employee = $this->database->get_employee_by_code($employee_code);
-        
-        if (!$employee) {
-            wp_send_json_error('Invalid employee code. Please check and try again.');
-        }
-        
-        // Set login session
-        if ($this->security->set_employee_login($employee->id)) {
-            wp_send_json_success(array(
-                'message' => 'Login successful',
-                'employee_name' => $employee->name,
-                'employee_id' => $employee->id
-            ));
-        } else {
-            wp_send_json_error('Failed to establish login session');
-        }
-    }
+    global $wpdb;
     
-    /**
-     * Employee logout
-     */
-    public function ett_employee_logout() {
-        if (!$this->security->verify_nonce($_POST['nonce'], 'ett_employee_logout')) {
-            wp_send_json_error('Invalid nonce');
-        }
-        
-        $this->security->destroy_session();
-        wp_send_json_success('Logged out successfully');
-    }
+    $issue_id = $this->security->sanitize_int($_POST['issue_id']);
+    $update_data = array();
     
-    /**
-     * Save work log - FIXED
-     */
-    public function ett_save_log() {
-        // Ensure session
-        $this->security->start_session();
+    if (isset($_POST['status'])) {
+        $update_data['issue_status'] = $this->security->sanitize_text($_POST['status']);
         
-        if (!$this->security->verify_nonce($_POST['nonce'], 'ett_save_log')) {
-            wp_send_json_error('Invalid security token');
-        }
-        
-        $employee_id = $this->security->sanitize_int($_POST['employee_id']);
-        $logs = isset($_POST['logs']) ? $_POST['logs'] : array();
-        $log_date = $this->security->sanitize_text($_POST['log_date']);
-        
-        if (!$employee_id || empty($logs) || !$log_date) {
-            wp_send_json_error('Missing required data');
-        }
-        
-        // Validate employee session
-        if (!$this->security->is_employee_logged_in() || 
-            $this->security->get_logged_in_employee_id() !== $employee_id) {
-            wp_send_json_error('Invalid employee session');
-        }
-        
-        $total_minutes = 0;
-        $missing_mandatory = false;
-        $successful_saves = 0;
-        
-        // Get mandatory tags for this employee
-        global $wpdb;
-        $mandatory_tags = $wpdb->get_col($wpdb->prepare("
-            SELECT tag_id FROM {$wpdb->prefix}ett_assignments 
-            WHERE employee_id = %d AND is_mandatory = 1
-        ", $employee_id));
-        
-        foreach ($logs as $log) {
-            $tag_id = intval($log['tag_id']);
-            $count = intval($log['count']);
-            
-            // Check if mandatory tag is missing
-            if (in_array($tag_id, $mandatory_tags) && $count == 0) {
-                $missing_mandatory = true;
-            }
-            
-            // Save log
-            if ($this->database->save_log($employee_id, $tag_id, $count, $log_date)) {
-                $successful_saves++;
-                
-                // Calculate total minutes
-                $tag = $wpdb->get_row($wpdb->prepare(
-                    "SELECT time_minutes FROM {$wpdb->prefix}ett_tags WHERE id = %d",
-                    $tag_id
-                ));
-                
-                if ($tag) {
-                    $total_minutes += $count * $tag->time_minutes;
-                }
-            }
-        }
-        
-        if ($successful_saves === 0) {
-            wp_send_json_error('Failed to save any work logs');
-        }
-        
-        // Record submission status
-        $status_message = $missing_mandatory ? 
-            'Submitted with missing mandatory tags' : 
-            'Data submitted successfully';
-            
-        $wpdb->replace(
-            $wpdb->prefix . 'ett_submission_status',
-            array(
-                'employee_id' => $employee_id,
-                'submission_date' => $log_date,
-                'submission_time' => current_time('mysql'),
-                'is_locked' => 1,
-                'total_minutes' => $total_minutes,
-                'status_message' => $status_message
-            )
-        );
-        
-        // Create warning if mandatory tags are missing
-        if ($missing_mandatory) {
-            $this->database->create_warning($employee_id, 'Mandatory tags were not filled', $log_date);
-        }
-        
-        wp_send_json_success($status_message . ' (' . $successful_saves . ' items saved)');
-    }
-    
-    /**
-     * Get logs by date - FIXED
-     */
-    public function ett_get_logs_by_date() {
-        $this->security->start_session();
-        
-        if (!$this->security->verify_nonce($_POST['nonce'], 'ett_get_logs_by_date')) {
-            wp_send_json_error('Invalid security token');
-        }
-        
-        $employee_id = $this->security->sanitize_int($_POST['employee_id']);
-        $log_date = $this->security->sanitize_text($_POST['log_date']);
-        
-        if (!$employee_id || !$log_date) {
-            wp_send_json_error('Missing required parameters');
-        }
-        
-        // Validate employee session
-        if (!$this->security->is_employee_logged_in() || 
-            $this->security->get_logged_in_employee_id() !== $employee_id) {
-            wp_send_json_error('Invalid employee session');
-        }
-        
-        $logs = $this->database->get_logs_by_date($employee_id, $log_date);
-        
-        $data = array();
-        foreach ($logs as $log) {
-            $data[$log->tag_id] = $log->count;
-        }
-        
-        wp_send_json_success($data);
-    }
-    
-    /**
-     * Break in
-     */
-    public function ett_break_in() {
-        if (!$this->security->verify_nonce($_POST['nonce'], 'ett_break')) {
-            wp_send_json_error('Invalid nonce');
-        }
-        
-        $employee_id = $this->security->sanitize_int($_POST['employee_id']);
-        
-        if ($this->database->start_break($employee_id)) {
-            wp_send_json_success('Break started');
-        } else {
-            wp_send_json_error('Already on break or failed to start break');
+        if ($_POST['status'] == 'resolved') {
+            $update_data['resolved_date'] = current_time('mysql');
         }
     }
     
-    /**
-     * Break out
-     */
-    public function ett_break_out() {
-        if (!$this->security->verify_nonce($_POST['nonce'], 'ett_break')) {
-            wp_send_json_error('Invalid nonce');
-        }
-        
-        $employee_id = $this->security->sanitize_int($_POST['employee_id']);
-        
-        if ($this->database->end_break($employee_id)) {
-            wp_send_json_success('Break ended');
-        } else {
-            wp_send_json_error('No active break found or failed to end break');
-        }
+    if (isset($_POST['admin_response'])) {
+        $update_data['admin_response'] = $this->security->sanitize_textarea($_POST['admin_response']);
     }
     
-    /**
-     * Raise issue
-     */
-    public function ett_raise_issue() {
-        if (!$this->security->verify_nonce($_POST['nonce'], 'ett_raise_issue')) {
-            wp_send_json_error('Invalid nonce');
-        }
-        
-        $employee_id = $this->security->sanitize_int($_POST['employee_id']);
-        $category = $this->security->sanitize_text($_POST['category']);
-        $description = $this->security->sanitize_textarea($_POST['description']);
-        
-        if ($this->database->create_issue($employee_id, $category, $description)) {
-            wp_send_json_success('Issue raised successfully');
-        } else {
-            wp_send_json_error('Failed to raise issue');
-        }
+    $result = $wpdb->update(
+        $wpdb->prefix . 'ett_issues',
+        $update_data,
+        array('id' => $issue_id)
+    );
+    
+    if ($result !== false) {
+        wp_send_json_success('Issue updated successfully');
+    } else {
+        wp_send_json_error('Failed to update issue');
+    }
+}
+
+/**
+ * Send break warning
+ */
+public function ett_send_break_warning() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
     }
     
-    // Placeholder methods for remaining AJAX handlers
-    public function ett_dismiss_warning() { wp_send_json_error('Feature under development'); }
-    public function ett_check_lock_status() { wp_send_json_error('Feature under development'); }
-    public function ett_get_break_status() { wp_send_json_error('Feature under development'); }
-    public function ett_get_employee_issues() { wp_send_json_error('Feature under development'); }
-    public function ett_update_employee() { wp_send_json_error('Feature under development'); }
-    public function ett_update_tag() { wp_send_json_error('Feature under development'); }
-    public function ett_update_assignment() { wp_send_json_error('Feature under development'); }
-    public function ett_edit_log() { wp_send_json_error('Feature under development'); }
-    public function ett_send_warning() { wp_send_json_error('Feature under development'); }
-    public function ett_remove_warning() { wp_send_json_error('Feature under development'); }
-    public function ett_update_issue_status() { wp_send_json_error('Feature under development'); }
-    public function ett_send_break_warning() { wp_send_json_error('Feature under development'); }
-    public function ett_send_missing_data_warning() { wp_send_json_error('Feature under development'); }
-    public function ett_update_log() { wp_send_json_error('Feature under development'); }
+    if (!$this->security->verify_nonce($_POST['nonce'], 'ett_send_break_warning')) {
+        wp_send_json_error('Invalid nonce');
+    }
+    
+    global $wpdb;
+    
+    $employee_id = $this->security->sanitize_int($_POST['employee_id']);
+    $break_id = $this->security->sanitize_int($_POST['break_id']);
+    
+    // Mark warning as sent
+    $wpdb->update(
+        $wpdb->prefix . 'ett_breaks',
+        array('warning_sent' => 1),
+        array('id' => $break_id),
+        array('%d'),
+        array('%d')
+    );
+    
+    // Add warning record
+    $result = $this->database->create_warning(
+        $employee_id, 
+        'Break time exceeded 20 minutes limit',
+        date('Y-m-d')
+    );
+    
+    if ($result) {
+        wp_send_json_success('Warning sent successfully');
+    } else {
+        wp_send_json_error('Failed to send warning');
+    }
+}
+
+/**
+ * Send missing data warning
+ */
+public function ett_send_missing_data_warning() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    if (!$this->security->verify_nonce($_POST['nonce'], 'ett_send_warning')) {
+        wp_send_json_error('Invalid nonce');
+    }
+    
+    $employee_id = $this->security->sanitize_int($_POST['employee_id']);
+    $missing_dates = $this->security->sanitize_text($_POST['missing_dates']);
+    
+    $result = $this->database->create_warning(
+        $employee_id,
+        'Missing data for dates: ' . $missing_dates,
+        date('Y-m-d')
+    );
+    
+    if ($result) {
+        wp_send_json_success('Warning sent successfully');
+    } else {
+        wp_send_json_error('Failed to send warning');
+    }
+}
+
+/**
+ * Update log (for Edit Logs page)
+ */
+public function ett_update_log() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    if (!$this->security->verify_nonce($_POST['nonce'], 'ett_update_log')) {
+        wp_send_json_error('Invalid nonce');
+    }
+    
+    global $wpdb;
+    
+    $log_id = $this->security->sanitize_int($_POST['log_id']);
+    $count = $this->security->sanitize_int($_POST['count']);
+    
+    // Get tag time for calculation
+    $log = $wpdb->get_row($wpdb->prepare("
+        SELECT l.*, t.time_minutes 
+        FROM {$wpdb->prefix}ett_logs l
+        LEFT JOIN {$wpdb->prefix}ett_tags t ON l.tag_id = t.id
+        WHERE l.id = %d
+    ", $log_id));
+    
+    if (!$log) {
+        wp_send_json_error('Log not found');
+    }
+    
+    $total_minutes = $count * $log->time_minutes;
+    
+    $result = $wpdb->update(
+        $wpdb->prefix . 'ett_logs',
+        array(
+            'count' => $count,
+            'total_minutes' => $total_minutes
+        ),
+        array('id' => $log_id),
+        array('%d', '%d'),
+        array('%d')
+    );
+    
+    if ($result !== false) {
+        wp_send_json_success('Log updated successfully');
+    } else {
+        wp_send_json_error('Failed to update log');
+    }
+}
+
+/**
+ * Send general warning
+ */
+public function ett_send_warning() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    if (!$this->security->verify_nonce($_POST['nonce'], 'ett_send_warning')) {
+        wp_send_json_error('Invalid nonce');
+    }
+    
+    $employee_id = $this->security->sanitize_int($_POST['employee_id']);
+    $message = $this->security->sanitize_text($_POST['message']);
+    $warning_date = isset($_POST['warning_date']) ? 
+        $this->security->sanitize_text($_POST['warning_date']) : 
+        date('Y-m-d');
+    
+    $result = $this->database->create_warning($employee_id, $message, $warning_date);
+    
+    if ($result) {
+        wp_send_json_success('Warning sent successfully');
+    } else {
+        wp_send_json_error('Failed to send warning');
+    }
+}
+
+/**
+ * Remove warning
+ */
+public function ett_remove_warning() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    if (!$this->security->verify_nonce($_POST['nonce'], 'ett_remove_warning')) {
+        wp_send_json_error('Invalid nonce');
+    }
+    
+    global $wpdb;
+    
+    $warning_id = $this->security->sanitize_int($_POST['warning_id']);
+    
+    $result = $wpdb->delete(
+        $wpdb->prefix . 'ett_warnings',
+        array('id' => $warning_id),
+        array('%d')
+    );
+    
+    if ($result !== false) {
+        wp_send_json_success('Warning removed successfully');
+    } else {
+        wp_send_json_error('Failed to remove warning');
+    }
+}
+
+/**
+ * Update employee (placeholder for future use)
+ */
+public function ett_update_employee() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    if (!$this->security->verify_nonce($_POST['nonce'], 'ett_update_employee')) {
+        wp_send_json_error('Invalid nonce');
+    }
+    
+    // Implementation for updating employee details
+    global $wpdb;
+    
+    $employee_id = $this->security->sanitize_int($_POST['employee_id']);
+    $name = $this->security->sanitize_text($_POST['name']);
+    $email = sanitize_email($_POST['email']);
+    $employee_code = $this->security->sanitize_text($_POST['employee_code']);
+    
+    $result = $wpdb->update(
+        $wpdb->prefix . 'ett_employees',
+        array(
+            'name' => $name,
+            'email' => $email,
+            'employee_code' => $employee_code
+        ),
+        array('id' => $employee_id),
+        array('%s', '%s', '%s'),
+        array('%d')
+    );
+    
+    if ($result !== false) {
+        wp_send_json_success('Employee updated successfully');
+    } else {
+        wp_send_json_error('Failed to update employee');
+    }
+}
+
+/**
+ * Update tag
+ */
+public function ett_update_tag() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    if (!$this->security->verify_nonce($_POST['nonce'], 'ett_update_tag')) {
+        wp_send_json_error('Invalid nonce');
+    }
+    
+    global $wpdb;
+    
+    $tag_id = $this->security->sanitize_int($_POST['tag_id']);
+    $tag_name = $this->security->sanitize_text($_POST['tag_name']);
+    $time_minutes = $this->security->sanitize_int($_POST['time_minutes'], 1);
+    
+    $result = $wpdb->update(
+        $wpdb->prefix . 'ett_tags',
+        array(
+            'tag_name' => $tag_name,
+            'time_minutes' => $time_minutes
+        ),
+        array('id' => $tag_id),
+        array('%s', '%d'),
+        array('%d')
+    );
+    
+    if ($result !== false) {
+        wp_send_json_success('Tag updated successfully');
+    } else {
+        wp_send_json_error('Failed to update tag');
+    }
+}
+
+/**
+ * Update assignment
+ */
+public function ett_update_assignment() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    if (!$this->security->verify_nonce($_POST['nonce'], 'ett_update_assignment')) {
+        wp_send_json_error('Invalid nonce');
+    }
+    
+    global $wpdb;
+    
+    $assignment_id = $this->security->sanitize_int($_POST['assignment_id']);
+    $is_mandatory = $this->security->sanitize_int($_POST['is_mandatory']);
+    
+    $result = $wpdb->update(
+        $wpdb->prefix . 'ett_assignments',
+        array('is_mandatory' => $is_mandatory),
+        array('id' => $assignment_id),
+        array('%d'),
+        array('%d')
+    );
+    
+    if ($result !== false) {
+        wp_send_json_success('Assignment updated successfully');
+    } else {
+        wp_send_json_error('Failed to update assignment');
+    }
+}
+
+/**
+ * Edit log (generic log editing)
+ */
+public function ett_edit_log() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+    
+    if (!$this->security->verify_nonce($_POST['nonce'], 'ett_edit_log')) {
+        wp_send_json_error('Invalid nonce');
+    }
+    
+    global $wpdb;
+    
+    $log_id = $this->security->sanitize_int($_POST['log_id']);
+    $field = $this->security->sanitize_text($_POST['field']);
+    $value = $this->security->sanitize_text($_POST['value']);
+    
+    // Validate field
+    $allowed_fields = array('count', 'total_minutes');
+    if (!in_array($field, $allowed_fields)) {
+        wp_send_json_error('Invalid field');
+    }
+    
+    $result = $wpdb->update(
+        $wpdb->prefix . 'ett_logs',
+        array($field => $value),
+        array('id' => $log_id),
+        array('%s'),
+        array('%d')
+    );
+    
+    if ($result !== false) {
+        wp_send_json_success('Log edited successfully');
+    } else {
+        wp_send_json_error('Failed to edit log');
+    }
 }

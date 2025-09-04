@@ -1,492 +1,328 @@
 <?php
 /**
- * WordPress hooks and shortcodes handler - FIXED VERSION
+ * Complete Employee Tags Graph Shortcode Implementation
+ * Add this to the ETT_Hooks class to replace the placeholder
  */
 
-class ETT_Hooks {
+public function all_employee_tags_graph_shortcode() {
+    global $wpdb;
     
-    private $database;
-    private $security;
+    ob_start();
     
-    public function __construct($database, $security) {
-        $this->database = $database;
-        $this->security = $security;
-    }
+    $current_date = date('Y-m-d');
     
-    /**
-     * Initialize hooks
-     */
-    public function init() {
-        $this->security->start_session();
-        
-        // Load text domain for translations
-        load_plugin_textdomain('employee-tag-tracker', false, dirname(plugin_basename(ETT_PLUGIN_FILE)) . '/languages');
-    }
+    $data = $wpdb->get_results($wpdb->prepare("
+        SELECT e.name as employee_name, e.employee_code, t.tag_name, l.count, l.total_minutes
+        FROM {$wpdb->prefix}ett_logs l
+        LEFT JOIN {$wpdb->prefix}ett_employees e ON l.employee_id = e.id
+        LEFT JOIN {$wpdb->prefix}ett_tags t ON l.tag_id = t.id
+        WHERE l.log_date = %s AND l.count > 0
+        ORDER BY e.name, t.tag_name
+    ", $current_date));
     
-    /**
-     * Enqueue frontend assets
-     */
-    public function enqueue_frontend_assets() {
-        wp_enqueue_style(
-            'ett-frontend-styles', 
-            ETT_PLUGIN_URL . 'assets/css/frontend.css', 
-            array(), 
-            ETT_PLUGIN_VERSION
-        );
-        
-        wp_enqueue_script(
-            'ett-frontend-scripts',
-            ETT_PLUGIN_URL . 'assets/js/frontend.js',
-            array('jquery'),
-            ETT_PLUGIN_VERSION,
-            true
-        );
-        
-        wp_enqueue_script(
-            'chart-js', 
-            'https://cdn.jsdelivr.net/npm/chart.js', 
-            array(), 
-            '3.9.1', 
-            true
-        );
-        
-        wp_localize_script('ett-frontend-scripts', 'ettFrontend', array(
-            'ajaxurl' => admin_url('admin-ajax.php'),
-            'nonces' => array(
-                'login' => wp_create_nonce('ett_employee_login'),
-                'logout' => wp_create_nonce('ett_employee_logout'),
-                'save_log' => wp_create_nonce('ett_save_log'),
-                'break' => wp_create_nonce('ett_break'),
-                'raise_issue' => wp_create_nonce('ett_raise_issue'),
-                'get_logs' => wp_create_nonce('ett_get_logs_by_date')
-            )
-        ));
-    }
+    // Get unique employees and tags
+    $employees = array();
+    $tags = array();
+    $chart_data = array();
     
-    /**
-     * Employee panel shortcode
-     */
-    public function employee_panel_shortcode() {
-        ob_start();
-        ?>
-        <div class="ett-panel-container">
-            <?php if ($this->security->is_employee_logged_in()): ?>
-                <?php $this->display_employee_panel(); ?>
-            <?php else: ?>
-                <?php $this->display_login_form(); ?>
-            <?php endif; ?>
-        </div>
-        <?php
-        return ob_get_clean();
-    }
-    
-    /**
-     * Display login form
-     */
-    private function display_login_form() {
-        ?>
-        <div class="ett-login-container">
-            <h2>Employee Login</h2>
-            <form id="ett-login-form">
-                <div class="ett-form-group">
-                    <label for="employee_code">Employee Code:</label>
-                    <input type="text" id="employee_code" name="employee_code" required>
-                </div>
-                <button type="submit" class="ett-button ett-button-primary">Login</button>
-                <div id="ett-login-message"></div>
-            </form>
-        </div>
-        
-        <script>
-        jQuery(document).ready(function($) {
-            $('#ett-login-form').on('submit', function(e) {
-                e.preventDefault();
-                var employee_code = $('#employee_code').val();
-                
-                if (!employee_code) {
-                    $('#ett-login-message').html('<p style="color:red;">Please enter employee code</p>');
-                    return;
-                }
-                
-                $.ajax({
-                    url: ettFrontend.ajaxurl,
-                    type: 'POST',
-                    data: {
-                        action: 'ett_employee_login',
-                        employee_code: employee_code,
-                        nonce: ettFrontend.nonces.login
-                    },
-                    beforeSend: function() {
-                        $('#ett-login-form button').prop('disabled', true).text('Logging in...');
-                    },
-                    success: function(response) {
-                        if (response.success) {
-                            $('#ett-login-message').html('<p style="color:green;">Login successful! Redirecting...</p>');
-                            setTimeout(function() {
-                                location.reload();
-                            }, 1000);
-                        } else {
-                            $('#ett-login-message').html('<p style="color:red;">' + response.data + '</p>');
-                        }
-                    },
-                    error: function() {
-                        $('#ett-login-message').html('<p style="color:red;">Network error. Please try again.</p>');
-                    },
-                    complete: function() {
-                        $('#ett-login-form button').prop('disabled', false).text('Login');
-                    }
-                });
-            });
-        });
-        </script>
-        <?php
-    }
-    
-    /**
-     * Display employee panel
-     */
-    private function display_employee_panel() {
-        $employee_id = $this->security->get_logged_in_employee_id();
-        
-        global $wpdb;
-        $employee = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$wpdb->prefix}ett_employees WHERE id = %d",
-            $employee_id
-        ));
-        
-        if (!$employee) {
-            echo '<p>Invalid session. Please login again.</p>';
-            return;
+    foreach ($data as $row) {
+        if (!in_array($row->employee_name, $employees)) {
+            $employees[] = $row->employee_name;
+        }
+        if (!in_array($row->tag_name, $tags)) {
+            $tags[] = $row->tag_name;
         }
         
-        $selected_date = isset($_POST['log_date']) ? sanitize_text_field($_POST['log_date']) : date('Y-m-d');
-        $assigned_tags = $this->database->get_employee_assignments($employee_id);
+        $chart_data[] = array(
+            'employee' => $row->employee_name,
+            'tag' => $row->tag_name,
+            'minutes' => intval($row->total_minutes),
+            'count' => intval($row->count)
+        );
+    }
+    ?>
+    <div class="ett-graph-container">
+        <h2>Employee Tag Performance - <?php echo date('F j, Y'); ?></h2>
         
-        // Check if data already submitted for selected date
-        $selected_submission = $wpdb->get_row($wpdb->prepare("
-            SELECT * FROM {$wpdb->prefix}ett_submission_status 
-            WHERE employee_id = %d AND submission_date = %s AND is_locked = 1
-        ", $employee_id, $selected_date));
-        ?>
-        <div class="ett-employee-panel">
-            <div class="ett-panel-header">
-                <h2>Welcome, <?php echo esc_html($employee->name); ?>!</h2>
-                <button id="ett-logout-btn" class="ett-logout-btn">Logout</button>
+        <?php if (!empty($data)): ?>
+            <div class="chart-controls" style="margin-bottom: 20px; text-align: center; padding: 15px; background: #f8f9fa; border-radius: 4px;">
+                <label style="margin-right: 15px;">
+                    <input type="radio" name="chart-type" value="minutes" checked> Time (Minutes)
+                </label>
+                <label>
+                    <input type="radio" name="chart-type" value="count"> Count
+                </label>
             </div>
             
-            <div class="ett-current-datetime">
-                <p><strong>Current Date & Time:</strong> <span id="current-datetime"></span></p>
+            <div class="chart-container" style="position: relative; height: 400px; margin: 20px 0;">
+                <canvas id="ett-performance-chart"></canvas>
             </div>
             
-            <div class="ett-date-selection">
-                <h3>Select Date for Work Log</h3>
-                <form method="post" id="date-selection-form">
-                    <input type="date" name="log_date" id="log_date" value="<?php echo esc_attr($selected_date); ?>" max="<?php echo date('Y-m-d'); ?>" />
-                    <button type="submit" class="ett-button">Load Data</button>
-                </form>
-            </div>
-            
-            <?php if ($selected_submission): ?>
-                <div class="ett-locked-notice">
-                    <h3>🔒 Data Already Submitted for <?php echo date('F j, Y', strtotime($selected_date)); ?></h3>
-                    <p>This data has been submitted and cannot be edited.</p>
-                    <p>If you need corrections, please contact your supervisor.</p>
-                </div>
-            <?php else: ?>
-                <div id="ett-work-form-container">
-                    <h3>Log Your Work - <?php echo date('F j, Y', strtotime($selected_date)); ?></h3>
-                    
-                    <form id="ett-work-log-form">
-                        <input type="hidden" id="employee_id" value="<?php echo esc_attr($employee_id); ?>" />
-                        <input type="hidden" id="selected_log_date" value="<?php echo esc_attr($selected_date); ?>" />
-                        
-                        <table style="width:100%;border-collapse:collapse;margin:20px 0;">
-                            <thead>
-                                <tr style="background:#f5f5f5;">
-                                    <th style="border:1px solid #ddd;padding:12px;text-align:left;">Tag</th>
-                                    <th style="border:1px solid #ddd;padding:12px;text-align:left;">Type</th>
-                                    <th style="border:1px solid #ddd;padding:12px;text-align:left;">Time/Unit</th>
-                                    <th style="border:1px solid #ddd;padding:12px;text-align:left;">Count</th>
-                                    <th style="border:1px solid #ddd;padding:12px;text-align:left;">Total</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php if (!empty($assigned_tags)): ?>
-                                    <?php foreach ($assigned_tags as $tag): ?>
-                                    <tr>
-                                        <td style="border:1px solid #ddd;padding:12px;">
-                                            <strong><?php echo esc_html($tag->tag_name); ?></strong>
-                                        </td>
-                                        <td style="border:1px solid #ddd;padding:12px;">
-                                            <?php if ($tag->is_mandatory): ?>
-                                                <span style="color:#dc3545;font-weight:bold;">⚠️ Mandatory</span>
-                                            <?php else: ?>
-                                                <span style="color:#28a745;">Optional</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td style="border:1px solid #ddd;padding:12px;"><?php echo esc_html($tag->time_minutes); ?> min</td>
-                                        <td style="border:1px solid #ddd;padding:12px;">
-                                            <input type="number" 
-                                                   class="ett-count-input" 
-                                                   data-tag-id="<?php echo esc_attr($tag->tag_id); ?>"
-                                                   data-time="<?php echo esc_attr($tag->time_minutes); ?>"
-                                                   data-mandatory="<?php echo esc_attr($tag->is_mandatory); ?>"
-                                                   value="0"
-                                                   min="0"
-                                                   style="width:80px;text-align:center;padding:5px;" />
-                                        </td>
-                                        <td style="border:1px solid #ddd;padding:12px;" class="ett-total-time" data-tag-id="<?php echo esc_attr($tag->tag_id); ?>">0 min</td>
-                                    </tr>
-                                    <?php endforeach; ?>
-                                <?php else: ?>
-                                    <tr>
-                                        <td colspan="5" style="border:1px solid #ddd;padding:12px;text-align:center;color:#666;">
-                                            No tags assigned to you yet. Please contact your supervisor.
-                                        </td>
-                                    </tr>
-                                <?php endif; ?>
-                            </tbody>
-                            <tfoot>
-                                <tr style="background:#f8f9fa;">
-                                    <td colspan="4" style="border:1px solid #ddd;padding:12px;"><strong>Total Time:</strong></td>
-                                    <td style="border:1px solid #ddd;padding:12px;"><strong id="ett-grand-total">0 hours 0 minutes</strong></td>
-                                </tr>
-                            </tfoot>
-                        </table>
-                        
-                        <?php if (!empty($assigned_tags)): ?>
-                        <div style="margin-top:20px;">
-                            <div style="background:#fff3cd;padding:15px;margin:10px 0;border-radius:4px;border:1px solid #ffeaa7;">
-                                <strong>⚠️ Important:</strong> Once submitted, this data will be locked and cannot be edited.
-                            </div>
-                            <button type="submit" class="ett-button ett-button-primary" style="font-size:16px;padding:12px 24px;">
-                                Submit & Lock Work Log
-                            </button>
-                            <div id="ett-message" style="margin-top:10px;"></div>
-                        </div>
-                        <?php endif; ?>
-                    </form>
-                </div>
-            <?php endif; ?>
-        </div>
-        
-        <script>
-        jQuery(document).ready(function($) {
-            // Update current datetime
-            function updateDateTime() {
-                var now = new Date();
-                var options = { 
-                    year: 'numeric', 
-                    month: 'long', 
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    timeZone: 'Asia/Kolkata',
-                    timeZoneName: 'short'
-                };
-                $('#current-datetime').text(now.toLocaleString('en-IN', options));
-            }
-            setInterval(updateDateTime, 1000);
-            updateDateTime();
-            
-            // Calculate totals
-            function calculateTotals() {
-                var grandTotal = 0;
-                $('.ett-count-input').each(function() {
-                    var count = parseInt($(this).val()) || 0;
-                    var time = parseInt($(this).data('time')) || 0;
-                    var total = count * time;
-                    var tagId = $(this).data('tag-id');
-                    $('.ett-total-time[data-tag-id="' + tagId + '"]').text(total + ' min');
-                    grandTotal += total;
-                });
-                var hours = Math.floor(grandTotal / 60);
-                var minutes = grandTotal % 60;
-                $('#ett-grand-total').text(hours + ' hours ' + minutes + ' minutes');
-            }
-            
-            $('.ett-count-input').on('input', calculateTotals);
-            
-            // Load existing data for selected date
-            function loadExistingData() {
-                var employeeId = $('#employee_id').val();
-                var logDate = $('#selected_log_date').val();
-                
-                if (!employeeId || !logDate) return;
-                
-                $.ajax({
-                    url: ettFrontend.ajaxurl,
-                    type: 'POST',
-                    data: {
-                        action: 'ett_get_logs_by_date',
-                        employee_id: employeeId,
-                        log_date: logDate,
-                        nonce: ettFrontend.nonces.get_logs
-                    },
-                    success: function(response) {
-                        if (response.success && response.data) {
-                            $.each(response.data, function(tag_id, count) {
-                                $('.ett-count-input[data-tag-id="' + tag_id + '"]').val(count);
-                            });
-                            calculateTotals();
+            <div class="chart-legend" style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 4px;">
+                <h4>Today's Summary</h4>
+                <div class="summary-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 10px;">
+                    <?php 
+                    $employee_totals = array();
+                    foreach ($data as $row) {
+                        if (!isset($employee_totals[$row->employee_name])) {
+                            $employee_totals[$row->employee_name] = 0;
                         }
+                        $employee_totals[$row->employee_name] += $row->total_minutes;
                     }
-                });
-            }
-            loadExistingData();
+                    
+                    foreach ($employee_totals as $emp_name => $total_mins): ?>
+                        <div class="summary-item" style="padding: 10px; background: white; border-radius: 4px; text-align: center; border-left: 3px solid #007cba;">
+                            <strong><?php echo esc_html($emp_name); ?>:</strong><br>
+                            <?php 
+                            $hours = floor($total_mins / 60);
+                            $minutes = $total_mins % 60;
+                            echo sprintf('%dh %dm', $hours, $minutes);
+                            ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
             
-            // Submit work log
-            $('#ett-work-log-form').on('submit', function(e) {
-                e.preventDefault();
-                
-                if (!confirm('Once submitted, this data will be locked and cannot be edited. Continue?')) {
+            <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                if (typeof Chart === 'undefined') {
+                    console.error('Chart.js not loaded');
+                    document.getElementById('ett-performance-chart').style.display = 'none';
+                    document.querySelector('.chart-container').innerHTML = '<p style="text-align:center;color:#999;padding:40px;">Chart.js library not available. Please refresh the page.</p>';
                     return;
                 }
                 
-                var logs = [];
-                var missingMandatory = false;
+                var ctx = document.getElementById('ett-performance-chart');
+                if (!ctx) return;
                 
-                $('.ett-count-input').each(function() {
-                    var count = parseInt($(this).val()) || 0;
-                    var tagId = $(this).data('tag-id');
-                    var isMandatory = $(this).data('mandatory') == '1';
-                    
-                    if (isMandatory && count === 0) {
-                        missingMandatory = true;
+                ctx = ctx.getContext('2d');
+                var employees = <?php echo json_encode($employees); ?>;
+                var tags = <?php echo json_encode($tags); ?>;
+                var chartData = <?php echo json_encode($chart_data); ?>;
+                
+                var colors = [
+                    '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', 
+                    '#FF9F40', '#8E5EA2', '#3cba9f', '#e8c3b9', '#c45850'
+                ];
+                
+                var ettChart;
+                
+                function createChart(dataType) {
+                    if (ettChart) {
+                        ettChart.destroy();
                     }
                     
-                    logs.push({
-                        tag_id: tagId,
-                        count: count
+                    var datasets = [];
+                    
+                    tags.forEach(function(tag, index) {
+                        var tagData = [];
+                        employees.forEach(function(emp) {
+                            var found = chartData.find(function(d) {
+                                return d.employee === emp && d.tag === tag;
+                            });
+                            var value = found ? (dataType === 'minutes' ? found.minutes : found.count) : 0;
+                            tagData.push(value);
+                        });
+                        
+                        datasets.push({
+                            label: tag,
+                            data: tagData,
+                            backgroundColor: colors[index % colors.length] + '80', // Add transparency
+                            borderColor: colors[index % colors.length],
+                            borderWidth: 2
+                        });
                     });
-                });
-                
-                if (missingMandatory) {
-                    if (!confirm('Warning: You have missed some mandatory tags. This will result in a warning. Continue?')) {
-                        return;
-                    }
-                }
-                
-                $.ajax({
-                    url: ettFrontend.ajaxurl,
-                    type: 'POST',
-                    data: {
-                        action: 'ett_save_log',
-                        employee_id: $('#employee_id').val(),
-                        logs: logs,
-                        log_date: $('#selected_log_date').val(),
-                        nonce: ettFrontend.nonces.save_log
-                    },
-                    beforeSend: function() {
-                        $('#ett-work-log-form button[type="submit"]').prop('disabled', true).text('Submitting...');
-                    },
-                    success: function(response) {
-                        if (response.success) {
-                            $('#ett-message').html('<div style="background:#d4edda;color:#155724;padding:12px;border-radius:4px;border:1px solid #c3e6cb;">✅ ' + response.data + '</div>');
-                            setTimeout(function() {
-                                location.reload();
-                            }, 2000);
-                        } else {
-                            $('#ett-message').html('<div style="background:#f8d7da;color:#721c24;padding:12px;border-radius:4px;border:1px solid #f5c6cb;">❌ ' + response.data + '</div>');
-                        }
-                    },
-                    error: function() {
-                        $('#ett-message').html('<div style="background:#f8d7da;color:#721c24;padding:12px;border-radius:4px;border:1px solid #f5c6cb;">❌ Network error. Please try again.</div>');
-                    },
-                    complete: function() {
-                        $('#ett-work-log-form button[type="submit"]').prop('disabled', false).text('Submit & Lock Work Log');
-                    }
-                });
-            });
-            
-            // Logout
-            $('#ett-logout-btn').click(function() {
-                if(confirm('Are you sure you want to logout?')) {
-                    $.ajax({
-                        url: ettFrontend.ajaxurl,
-                        type: 'POST',
+                    
+                    ettChart = new Chart(ctx, {
+                        type: 'bar',
                         data: {
-                            action: 'ett_employee_logout',
-                            nonce: ettFrontend.nonces.logout
+                            labels: employees,
+                            datasets: datasets
                         },
-                        success: function(response) {
-                            if (response.success) {
-                                location.reload();
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            interaction: {
+                                mode: 'index',
+                                intersect: false,
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    title: {
+                                        display: true,
+                                        text: dataType === 'minutes' ? 'Minutes' : 'Count'
+                                    },
+                                    grid: {
+                                        color: '#e0e0e0'
+                                    }
+                                },
+                                x: {
+                                    title: {
+                                        display: true,
+                                        text: 'Employees'
+                                    },
+                                    grid: {
+                                        display: false
+                                    }
+                                }
+                            },
+                            plugins: {
+                                legend: {
+                                    display: true,
+                                    position: 'top',
+                                    labels: {
+                                        usePointStyle: true,
+                                        padding: 20
+                                    }
+                                },
+                                tooltip: {
+                                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                                    titleColor: '#fff',
+                                    bodyColor: '#fff',
+                                    borderColor: '#ddd',
+                                    borderWidth: 1,
+                                    callbacks: {
+                                        label: function(context) {
+                                            var label = context.dataset.label || '';
+                                            if (label) {
+                                                label += ': ';
+                                            }
+                                            label += context.parsed.y;
+                                            label += dataType === 'minutes' ? ' minutes' : ' items';
+                                            return label;
+                                        },
+                                        footer: function(tooltipItems) {
+                                            var total = 0;
+                                            tooltipItems.forEach(function(item) {
+                                                total += item.parsed.y;
+                                            });
+                                            return 'Total: ' + total + (dataType === 'minutes' ? ' minutes' : ' items');
+                                        }
+                                    }
+                                }
+                            },
+                            animation: {
+                                duration: 1000,
+                                easing: 'easeInOutQuart'
                             }
                         }
                     });
                 }
+                
+                // Initial chart
+                createChart('minutes');
+                
+                // Chart type toggle
+                document.querySelectorAll('input[name="chart-type"]').forEach(function(radio) {
+                    radio.addEventListener('change', function() {
+                        createChart(this.value);
+                    });
+                });
             });
-        });
-        </script>
-        <?php
+            </script>
+        <?php else: ?>
+            <div style="padding: 40px; text-align: center; background: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0;">
+                <h3 style="color: #666; margin-bottom: 15px;">No Data Available</h3>
+                <p style="color: #999;">No work data has been logged for today yet. Data will appear here once employees start submitting their work logs.</p>
+                <p style="color: #999; font-size: 14px; margin-top: 10px;">Check back later or refresh the page to see updated charts.</p>
+            </div>
+        <?php endif; ?>
+    </div>
+    
+    <style>
+    .ett-graph-container {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        margin: 20px 0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border: 1px solid #e0e0e0;
     }
     
-    /**
-     * Warning chart shortcode
-     */
-    public function warning_chart_shortcode() {
-        global $wpdb;
+    .ett-graph-container h2 {
+        text-align: center;
+        color: #333;
+        margin-bottom: 20px;
+        font-size: 24px;
+    }
+    
+    .chart-controls {
+        text-align: center;
+        padding: 15px;
+        background: #f8f9fa;
+        border-radius: 4px;
+        margin-bottom: 20px;
+    }
+    
+    .chart-controls label {
+        cursor: pointer;
+        padding: 8px 15px;
+        margin: 0 5px;
+        border-radius: 4px;
+        transition: background-color 0.3s;
+        display: inline-block;
+    }
+    
+    .chart-controls label:hover {
+        background: #e9ecef;
+    }
+    
+    .chart-controls input[type="radio"] {
+        margin-right: 5px;
+    }
+    
+    .chart-container {
+        position: relative;
+        height: 400px;
+        margin: 20px 0;
+    }
+    
+    .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-top: 10px;
+    }
+    
+    .summary-item {
+        padding: 15px;
+        background: white;
+        border-radius: 4px;
+        text-align: center;
+        border-left: 3px solid #007cba;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    
+    @media (max-width: 768px) {
+        .ett-graph-container {
+            margin: 10px 0;
+            padding: 15px;
+        }
         
-        $warnings = $wpdb->get_results("
-            SELECT w.*, e.name as employee_name
-            FROM {$wpdb->prefix}ett_warnings w
-            LEFT JOIN {$wpdb->prefix}ett_employees e ON w.employee_id = e.id
-            WHERE w.is_active = 1
-            ORDER BY w.created_at DESC
-            LIMIT 20
-        ");
+        .ett-graph-container h2 {
+            font-size: 20px;
+        }
         
-        ob_start();
-        ?>
-        <div class="ett-warning-chart">
-            <h3>Active Warnings</h3>
-            <?php if (!empty($warnings)): ?>
-                <table style="width:100%;border-collapse:collapse;">
-                    <thead>
-                        <tr style="background:#f5f5f5;">
-                            <th style="border:1px solid #ddd;padding:10px;text-align:left;">Employee</th>
-                            <th style="border:1px solid #ddd;padding:10px;text-align:left;">Date</th>
-                            <th style="border:1px solid #ddd;padding:10px;text-align:left;">Warning</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($warnings as $warning): ?>
-                        <tr>
-                            <td style="border:1px solid #ddd;padding:10px;"><?php echo esc_html($warning->employee_name); ?></td>
-                            <td style="border:1px solid #ddd;padding:10px;"><?php echo esc_html($warning->warning_date); ?></td>
-                            <td style="border:1px solid #ddd;padding:10px;"><?php echo esc_html($warning->warning_message); ?></td>
-                        </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php else: ?>
-                <p>No active warnings at this time.</p>
-            <?php endif; ?>
-        </div>
-        <?php
-        return ob_get_clean();
+        .chart-container {
+            height: 300px;
+        }
+        
+        .summary-grid {
+            grid-template-columns: 1fr;
+        }
+        
+        .chart-controls {
+            padding: 10px;
+        }
+        
+        .chart-controls label {
+            display: block;
+            margin: 5px 0;
+        }
     }
+    </style>
+    <?php
     
-    /**
-     * All employee tags graph shortcode
-     */
-    public function all_employee_tags_graph_shortcode() {
-        return '<div><h3>Employee Performance Chart</h3><p>Feature under development - Chart.js integration needed</p></div>';
-    }
-    
-    /**
-     * Break tracker shortcode
-     */
-    public function break_tracker_shortcode() {
-        return '<div><h3>Break Tracker</h3><p>Feature under development</p></div>';
-    }
-    
-    /**
-     * Issue tracker shortcode
-     */
-    public function issue_tracker_shortcode() {
-        return '<div><h3>Issue Tracker</h3><p>Feature under development</p></div>';
-    }
+    return ob_get_clean();
 }
